@@ -1,37 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "common.h"
 
-typedef enum {
-    OP_ADD, OP_LT, OP_ASSIGN,
-    OP_PRINT_INT, OP_PRINT_FLOAT,
-    OP_LABEL, OP_JMP, OP_JMPTRUE, OP_HALT
-} OpCode;
-
-typedef enum { VAR_INT, VAR_FLOAT } VarType;
-
-typedef struct {
-    OpCode op;
-    char *dest;
-    char *src1;
-    char *src2;
-    VarType dest_type;
-} Quad;
-
-typedef struct {
-    char *name;
-    VarType type;
-    int is_temp;
-} Symbol;
-
-typedef struct {
-    char *label;
-    VarType type;
-    union {
-        int ival;
-        float fval;
-    } val;
-} Constant;
 
 extern Quad quads[];
 extern int nquad;
@@ -44,45 +15,34 @@ static FILE *out;
 static int lt_label_counter = 0;
 
 /* ------------------------------------------------------------------ */
-/*  Small helper: find symbol index by name, -1 if not found           */
-/* ------------------------------------------------------------------ */
-static int sym_index(const char *name) {
-    for (int i = 0; i < sym_cnt; i++)
-        if (strcmp(symtab[i].name, name) == 0)
-            return i;
-    return -1;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Emit the data section – only integer variables (user & temp) are   */
-/*  printed.  Float symbols are intentionally ignored.                 */
+/*  Emit the data section – only read symtab, never write it           */
 /* ------------------------------------------------------------------ */
 static void emit_data_section(FILE *f) {
     fprintf(f, "DATA SEGMENT\n");
 
     fprintf(f, "    ; User variables\n");
     for (int i = 0; i < sym_cnt; i++) {
-        if (symtab[i].is_temp) continue;          /* skip temporaries */
-        if (symtab[i].name == NULL || symtab[i].name[0] == '\0') continue; /* skip empty */
-        if (symtab[i].type != VAR_INT) continue;  /* float not supported */
-        fprintf(f, "    %-15s DW 0\n", symtab[i].name);
+        if (symtab[i].is_temp) continue;
+        if (symtab[i].name == NULL || symtab[i].name[0] == '\0') continue;
+        if (symtab[i].type == VAR_INT)
+            fprintf(f, "    %-15s DW 0\n", symtab[i].name);
+        /* Float user variables are unsupported → simply skip */
     }
 
     fprintf(f, "\n    ; Temporaries\n");
-    for (int i = 0; i < nquad; i++) {
-        printf("%s %d %d\n", symtab[i].name, symtab[i].is_temp, sym_cnt);
+    for (int i = 0; i < sym_cnt; i++) {
         if (!symtab[i].is_temp) continue;
         if (symtab[i].name == NULL || symtab[i].name[0] == '\0') continue;
-        if (symtab[i].type != VAR_INT) continue;
-        fprintf(f, "    %-15s DW 0\n", symtab[i].name);
+        if (symtab[i].type == VAR_INT)
+            fprintf(f, "    %-15s DW 0\n", symtab[i].name);
     }
 
     fprintf(f, "\n    ; Constants\n");
     for (int i = 0; i < nconst; i++) {
-        if (const_pool[i].type == VAR_INT) {
+        if (const_pool[i].type == VAR_INT)
             fprintf(f, "    %-15s DW %d\n",
                     const_pool[i].label, const_pool[i].val.ival);
-        } else {  /* VAR_FLOAT -> string constant */
+        else {  /* VAR_FLOAT → string constant */
             char buf[64];
             sprintf(buf, "%.2f", const_pool[i].val.fval);
             fprintf(f, "    %-15s DB '%s', '$'\n",
@@ -94,7 +54,7 @@ static void emit_data_section(FILE *f) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Emit code for one quadruple                                        */
+/*  Emit code for one quadruple (reads quads, never touches symtab)    */
 /* ------------------------------------------------------------------ */
 static void emit_quad(FILE *f, Quad *q) {
     char *d = q->dest;
@@ -111,8 +71,8 @@ static void emit_quad(FILE *f, Quad *q) {
                 fprintf(f, "    MOV AX, [%s]\n", s1);
                 fprintf(f, "    MOV [%s], AX\n", d);
             } else {
-                /* Float assignment is not supported; ignore */
-                fprintf(f, "    ; (float assignment not implemented)\n");
+                /* Float assignment not implemented */
+                fprintf(f, "    ; float assign ignored\n");
             }
             break;
 
@@ -122,7 +82,7 @@ static void emit_quad(FILE *f, Quad *q) {
                 fprintf(f, "    ADD AX, [%s]\n", s2);
                 fprintf(f, "    MOV [%s], AX\n", d);
             } else {
-                fprintf(f, "    ; (float addition not implemented)\n");
+                fprintf(f, "    ; float add ignored\n");
             }
             break;
 
@@ -156,7 +116,6 @@ static void emit_quad(FILE *f, Quad *q) {
             break;
 
         case OP_PRINT_FLOAT:
-            /* Print the string constant directly */
             fprintf(f, "    MOV DX, OFFSET %s\n", s1);
             fprintf(f, "    MOV AH, 09h\n");
             fprintf(f, "    INT 21h\n");
@@ -233,7 +192,7 @@ static void emit_code_section(FILE *f) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Public entry point                                                 */
+/*  Public entry point – no writes to symtab                           */
 /* ------------------------------------------------------------------ */
 void generate_emu8086(const char *filename) {
     out = fopen(filename, "w");
@@ -242,19 +201,13 @@ void generate_emu8086(const char *filename) {
         exit(1);
     }
 
-    /* --- Optional: fix temporary flags just before emission --- */
-    for (int i = 0; i < nquad; i++) {
-        Quad *q = &quads[i];
-        /* For any OP_ASSIGN that defines a temporary, ensure it's marked is_temp=1 */
-        if (q->op == OP_ASSIGN || q->op == OP_ADD || q->op == OP_LT) {
-            int idx = sym_index(q->dest);
-            if (idx >= 0 && q->dest[0] == '_' && q->dest[1] == 't') {
-                symtab[idx].is_temp = 1;          /* force it to temporary if name looks like _tN */
-            }
-        }
-    }
+    // Optionally verify symtab at entry:
+    printf("Inside generate_emu8086, symtab:\n");
+    for (int i = 0; i < sym_cnt; i++)
+        printf("  [%d] %s\n", i, symtab[i].name);
 
     emit_data_section(out);
     emit_code_section(out);
+
     fclose(out);
 }

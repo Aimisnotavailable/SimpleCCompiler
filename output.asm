@@ -4,13 +4,15 @@ DATA SEGMENT
 
     ; Temporaries
     _t0             DW 0
+    _t1             DW 0
 
     ; Constants
     _ci0            DW 0
     _cf1            DB '3.14', '$'
     _cf2            DB '31.40', '$'
-    _ci3            DW 1
-    _ci4            DW 5
+    _ci3            DW 12
+    _ci4            DW 1
+    _ci5            DW 5
 DATA ENDS
 
 CODE SEGMENT
@@ -39,13 +41,17 @@ L0:
     MOV DL, 0Ah
     MOV AH, 2
     INT 21h
+    MOV AX, [_ci3]
+    CALL PRINT_INT
     MOV AX, [x]
-    ADD AX, [_ci3]
+    CALL PRINT_INT
+    MOV AX, [x]
+    ADD AX, [_ci4]
     MOV [_t0], AX
     MOV AX, [_t0]
     MOV [x], AX
     MOV AX, [x]
-    CMP AX, [_ci4]
+    CMP AX, [_ci5]
     JL L_true0
     MOV WORD PTR [_t1], 0
     JMP L_end0

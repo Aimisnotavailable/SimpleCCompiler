@@ -6,10 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include "common.h"
 
 #ifndef VARTYPE_DEFINED
 #define VARTYPE_DEFINED
-typedef enum { VAR_INT, VAR_FLOAT } VarType;
 #endif
 
 /* ------------------------------------------------------------------
@@ -74,12 +74,6 @@ void append_stmt(ASTNode *block, ASTNode *stmt);
 /* ------------------------------------------------------------------
    Symbol table (global scope only)
    ------------------------------------------------------------------ */
-typedef struct {
-    char *name;
-    VarType type;
-    ASTNode *init;   /* initialiser expression, NULL if none */
-    int is_temp;     /* 1 if temporary variable */
-} Symbol;
 
 #define MAX_SYMBOLS 200
 Symbol symtab[MAX_SYMBOLS];
@@ -97,33 +91,10 @@ VarType node_type(ASTNode *n);
 /* ------------------------------------------------------------------
    Three‑address code (TAC) structures and globals
    ------------------------------------------------------------------ */
-typedef enum {
-    OP_ADD, OP_LT, OP_ASSIGN,
-    OP_PRINT_INT, OP_PRINT_FLOAT,
-    OP_LABEL, OP_JMP, OP_JMPTRUE, OP_HALT
-} OpCode;
-
-typedef struct {
-    OpCode op;
-    char *dest;
-    char *src1;
-    char *src2;
-    VarType dest_type;      /* type of result (for ADD) */
-} Quad;
 
 #define MAX_QUADS 500
 Quad quads[MAX_QUADS];
 int nquad = 0;
-
-/* For constants and labels */
-typedef struct {
-    char *label;
-    VarType type;
-    union {
-        int ival;
-        float fval;
-    } val;
-} Constant;
 
 #define MAX_CONST 100
 Constant const_pool[MAX_CONST];
@@ -584,8 +555,22 @@ static void ast_to_dot_rec(FILE *f, ASTNode *n, int parent_id) {
         case NODE_ASSIGN:
             snprintf(label, sizeof(label), "ASSIGN(%s)", n->d.assign.name);
             break;
-        case NODE_PRINTF:
-            snprintf(label, sizeof(label), "PRINTF(%s)", n->d.print.fmt);
+        case NODE_PRINTF: 
+            /* fmt is like "%f", including the surrounding double quotes */
+            char *raw = n->d.print.fmt;
+            char clean[256];
+            int j = 0;
+            for (int i = 0; raw[i] != '\0'; i++) {
+                if (raw[i] == '"') {
+                    clean[j++] = '\\';   /* escape the quote for DOT */
+                }
+                clean[j++] = raw[i];
+            }
+            clean[j] = '\0';
+
+            /* Now clean is \"%f\" */
+            /* Assemble label: PRINTF(\"%f\") */
+            snprintf(label, sizeof(label), "PRINTF(%s)", clean);
             shape = "diamond";
             break;
         case NODE_BLOCK:
@@ -676,6 +661,10 @@ int main(int argc, char **argv) {
     if (ast_root) {
         generate_ast_dot(ast_root, "ast.dot");
     }   
+
+    printf("Before generate_emu8086, symtab:\n");
+    for (int i = 0; i < sym_cnt; i++)
+        printf("  [%d] %s\n", i, symtab[i].name);
 
     /* Write emu8086 assembly */
     generate_emu8086("output.asm");

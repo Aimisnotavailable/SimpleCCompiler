@@ -77,10 +77,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include "common.h"
 
 #ifndef VARTYPE_DEFINED
 #define VARTYPE_DEFINED
-typedef enum { VAR_INT, VAR_FLOAT } VarType;
 #endif
 
 /* ------------------------------------------------------------------
@@ -145,12 +145,6 @@ void append_stmt(ASTNode *block, ASTNode *stmt);
 /* ------------------------------------------------------------------
    Symbol table (global scope only)
    ------------------------------------------------------------------ */
-typedef struct {
-    char *name;
-    VarType type;
-    ASTNode *init;   /* initialiser expression, NULL if none */
-    int is_temp;     /* 1 if temporary variable */
-} Symbol;
 
 #define MAX_SYMBOLS 200
 Symbol symtab[MAX_SYMBOLS];
@@ -168,33 +162,10 @@ VarType node_type(ASTNode *n);
 /* ------------------------------------------------------------------
    Three‑address code (TAC) structures and globals
    ------------------------------------------------------------------ */
-typedef enum {
-    OP_ADD, OP_LT, OP_ASSIGN,
-    OP_PRINT_INT, OP_PRINT_FLOAT,
-    OP_LABEL, OP_JMP, OP_JMPTRUE, OP_HALT
-} OpCode;
-
-typedef struct {
-    OpCode op;
-    char *dest;
-    char *src1;
-    char *src2;
-    VarType dest_type;      /* type of result (for ADD) */
-} Quad;
 
 #define MAX_QUADS 500
 Quad quads[MAX_QUADS];
 int nquad = 0;
-
-/* For constants and labels */
-typedef struct {
-    char *label;
-    VarType type;
-    union {
-        int ival;
-        float fval;
-    } val;
-} Constant;
 
 #define MAX_CONST 100
 Constant const_pool[MAX_CONST];
@@ -240,7 +211,7 @@ extern FILE *yyin;
 
 
 /* Line 189 of yacc.c  */
-#line 244 "parser.tab.c"
+#line 215 "parser.tab.c"
 
 /* Enabling traces.  */
 #ifndef YYDEBUG
@@ -263,7 +234,7 @@ extern FILE *yyin;
 /* "%code requires" blocks.  */
 
 /* Line 209 of yacc.c  */
-#line 171 "parser.y"
+#line 142 "parser.y"
 
     #ifndef VARTYPE_DEFINED
     #define VARTYPE_DEFINED
@@ -273,7 +244,7 @@ extern FILE *yyin;
 
 
 /* Line 209 of yacc.c  */
-#line 277 "parser.tab.c"
+#line 248 "parser.tab.c"
 
 /* Tokens.  */
 #ifndef YYTOKENTYPE
@@ -300,7 +271,7 @@ typedef union YYSTYPE
 {
 
 /* Line 214 of yacc.c  */
-#line 182 "parser.y"
+#line 153 "parser.y"
 
     int    ival;          /* INT_NUM */
     float  fval;          /* FLOAT_NUM */
@@ -311,7 +282,7 @@ typedef union YYSTYPE
 
 
 /* Line 214 of yacc.c  */
-#line 315 "parser.tab.c"
+#line 286 "parser.tab.c"
 } YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
@@ -323,7 +294,7 @@ typedef union YYSTYPE
 
 
 /* Line 264 of yacc.c  */
-#line 327 "parser.tab.c"
+#line 298 "parser.tab.c"
 
 #ifdef short
 # undef short
@@ -612,11 +583,11 @@ static const yytype_int8 yyrhs[] =
 };
 
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
-static const yytype_uint16 yyrline[] =
+static const yytype_uint8 yyrline[] =
 {
-       0,   209,   209,   213,   214,   218,   227,   228,   232,   237,
-     238,   239,   243,   244,   260,   275,   276,   277,   281,   282,
-     283,   284
+       0,   180,   180,   184,   185,   189,   198,   199,   203,   208,
+     209,   210,   214,   215,   231,   246,   247,   248,   252,   253,
+     254,   255
 };
 #endif
 
@@ -1543,21 +1514,21 @@ yyreduce:
         case 2:
 
 /* Line 1455 of yacc.c  */
-#line 209 "parser.y"
+#line 180 "parser.y"
     { ast_root = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 3:
 
 /* Line 1455 of yacc.c  */
-#line 213 "parser.y"
+#line 184 "parser.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 5:
 
 /* Line 1455 of yacc.c  */
-#line 219 "parser.y"
+#line 190 "parser.y"
     {
           if (!sym_insert((yyvsp[(2) - (5)].str), (yyvsp[(1) - (5)].dtype), (yyvsp[(4) - (5)].node), 0))
               fprintf(stderr, "Semantic error: redeclaration of '%s'\n", (yyvsp[(2) - (5)].str));
@@ -1568,49 +1539,49 @@ yyreduce:
   case 6:
 
 /* Line 1455 of yacc.c  */
-#line 227 "parser.y"
+#line 198 "parser.y"
     { (yyval.dtype) = VAR_INT; ;}
     break;
 
   case 7:
 
 /* Line 1455 of yacc.c  */
-#line 228 "parser.y"
+#line 199 "parser.y"
     { (yyval.dtype) = VAR_FLOAT; ;}
     break;
 
   case 8:
 
 /* Line 1455 of yacc.c  */
-#line 233 "parser.y"
+#line 204 "parser.y"
     { (yyval.node) = make_loop((yyvsp[(3) - (9)].node), (yyvsp[(7) - (9)].node)); ;}
     break;
 
   case 9:
 
 /* Line 1455 of yacc.c  */
-#line 237 "parser.y"
+#line 208 "parser.y"
     { (yyval.node) = make_block(NULL, 0); ;}
     break;
 
   case 10:
 
 /* Line 1455 of yacc.c  */
-#line 238 "parser.y"
+#line 209 "parser.y"
     { append_stmt((yyvsp[(1) - (2)].node), (yyvsp[(2) - (2)].node)); (yyval.node) = (yyvsp[(1) - (2)].node); ;}
     break;
 
   case 11:
 
 /* Line 1455 of yacc.c  */
-#line 239 "parser.y"
+#line 210 "parser.y"
     { yyerrok; ;}
     break;
 
   case 13:
 
 /* Line 1455 of yacc.c  */
-#line 245 "parser.y"
+#line 216 "parser.y"
     {
           Symbol *sym = sym_lookup((yyvsp[(1) - (4)].str));
           if (!sym)
@@ -1628,7 +1599,7 @@ yyreduce:
   case 14:
 
 /* Line 1455 of yacc.c  */
-#line 261 "parser.y"
+#line 232 "parser.y"
     {
           char *fmt = (yyvsp[(3) - (7)].str);
           ASTNode *expr = (yyvsp[(5) - (7)].node);
@@ -1645,49 +1616,49 @@ yyreduce:
   case 15:
 
 /* Line 1455 of yacc.c  */
-#line 275 "parser.y"
+#line 246 "parser.y"
     { (yyval.node) = make_add((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 16:
 
 /* Line 1455 of yacc.c  */
-#line 276 "parser.y"
+#line 247 "parser.y"
     { (yyval.node) = make_lt((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 18:
 
 /* Line 1455 of yacc.c  */
-#line 281 "parser.y"
+#line 252 "parser.y"
     { (yyval.node) = make_id((yyvsp[(1) - (1)].str)); ;}
     break;
 
   case 19:
 
 /* Line 1455 of yacc.c  */
-#line 282 "parser.y"
+#line 253 "parser.y"
     { (yyval.node) = make_int((yyvsp[(1) - (1)].ival)); ;}
     break;
 
   case 20:
 
 /* Line 1455 of yacc.c  */
-#line 283 "parser.y"
+#line 254 "parser.y"
     { (yyval.node) = make_float((yyvsp[(1) - (1)].fval)); ;}
     break;
 
   case 21:
 
 /* Line 1455 of yacc.c  */
-#line 284 "parser.y"
+#line 255 "parser.y"
     { (yyval.node) = (yyvsp[(2) - (3)].node); ;}
     break;
 
 
 
 /* Line 1455 of yacc.c  */
-#line 1691 "parser.tab.c"
+#line 1662 "parser.tab.c"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -1899,7 +1870,7 @@ yyreturn:
 
 
 /* Line 1675 of yacc.c  */
-#line 287 "parser.y"
+#line 258 "parser.y"
 
 
 /* ============================================================
@@ -2200,8 +2171,22 @@ static void ast_to_dot_rec(FILE *f, ASTNode *n, int parent_id) {
         case NODE_ASSIGN:
             snprintf(label, sizeof(label), "ASSIGN(%s)", n->d.assign.name);
             break;
-        case NODE_PRINTF:
-            snprintf(label, sizeof(label), "PRINTF(%s)", n->d.print.fmt);
+        case NODE_PRINTF: 
+            /* fmt is like "%f", including the surrounding double quotes */
+            char *raw = n->d.print.fmt;
+            char clean[256];
+            int j = 0;
+            for (int i = 0; raw[i] != '\0'; i++) {
+                if (raw[i] == '"') {
+                    clean[j++] = '\\';   /* escape the quote for DOT */
+                }
+                clean[j++] = raw[i];
+            }
+            clean[j] = '\0';
+
+            /* Now clean is \"%f\" */
+            /* Assemble label: PRINTF(\"%f\") */
+            snprintf(label, sizeof(label), "PRINTF(%s)", clean);
             shape = "diamond";
             break;
         case NODE_BLOCK:
@@ -2292,6 +2277,10 @@ int main(int argc, char **argv) {
     if (ast_root) {
         generate_ast_dot(ast_root, "ast.dot");
     }   
+
+    printf("Before generate_emu8086, symtab:\n");
+    for (int i = 0; i < sym_cnt; i++)
+        printf("  [%d] %s\n", i, symtab[i].name);
 
     /* Write emu8086 assembly */
     generate_emu8086("output.asm");
