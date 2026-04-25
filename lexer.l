@@ -1,23 +1,39 @@
 %{
 #include "parser.tab.h"
-#include <string.h>
+#include <string.h>          /* for strdup */
+void yyerror(const char *);  /* forward declaration */
 %}
 
-%%
-
-[ \t\r\n]+               ; /* skip whitespace */
-"int"                    { return INT; }
-[0-9]+                   {
-                            yylval.num = atoi(yytext);
-                            return NUMBER;
-                         }
-[a-zA-Z_][a-zA-Z0-9_]*    {
-                            yylval.id = strdup(yytext);
-                            return ID;
-                         }
-"="                      { return '='; }
-";"                      { return ';'; }
-.                        { /* ignore unknown chars */ }
+DIGIT   [0-9]
+ID      [a-zA-Z_][a-zA-Z0-9_]*
 
 %%
-int yywrap(void) { return 1; }
+"int"           { return INT; }
+"float"         { return FLOAT; }
+"do"            { return DO; }
+"while"         { return WHILE; }
+"printf"        { return PRINTF; }
+
+{ID}            { yylval.str = strdup(yytext); return ID; }
+
+{DIGIT}+"."{DIGIT}+  { yylval.fval = atof(yytext); return FLOAT_NUM; }
+{DIGIT}+             { yylval.ival = atoi(yytext); return INT_NUM; }
+
+\"%d\"          { yylval.str = strdup(yytext); return STRING; }
+\"%f\"          { yylval.str = strdup(yytext); return STRING; }
+
+"+"             { return '+'; }
+"<"             { return '<'; }
+"="             { return '='; }
+";"             { return ';'; }
+","             { return ','; }
+"("             { return '('; }
+")"             { return ')'; }
+"{"             { return '{'; }
+"}"             { return '}'; }
+
+[ \t\n]         /* skip whitespace */
+.               { yyerror("Illegal character"); }
+%%
+
+int yywrap() { return 1; }

@@ -32,6 +32,20 @@
    This special exception was added by the Free Software Foundation in
    version 2.2 of Bison.  */
 
+/* "%code requires" blocks.  */
+
+/* Line 1676 of yacc.c  */
+#line 171 "parser.y"
+
+    #ifndef VARTYPE_DEFINED
+    #define VARTYPE_DEFINED
+    typedef enum { VAR_INT, VAR_FLOAT } VarType;
+    #endif
+
+
+
+/* Line 1676 of yacc.c  */
+#line 49 "parser.tab.h"
 
 /* Tokens.  */
 #ifndef YYTOKENTYPE
@@ -39,9 +53,15 @@
    /* Put the tokens into the symbol table, so that GDB and other debuggers
       know about them.  */
    enum yytokentype {
-     NUMBER = 258,
-     ID = 259,
-     INT = 260
+     INT = 258,
+     FLOAT = 259,
+     DO = 260,
+     WHILE = 261,
+     PRINTF = 262,
+     ID = 263,
+     STRING = 264,
+     INT_NUM = 265,
+     FLOAT_NUM = 266
    };
 #endif
 
@@ -52,15 +72,18 @@ typedef union YYSTYPE
 {
 
 /* Line 1676 of yacc.c  */
-#line 58 "parser.y"
+#line 182 "parser.y"
 
-    int num;
-    char *id;
+    int    ival;          /* INT_NUM */
+    float  fval;          /* FLOAT_NUM */
+    char  *str;           /* ID, STRING */
+    struct ASTNode *node; /* expressions and statements */
+    VarType dtype;        /* for Type nonterminal */
 
 
 
 /* Line 1676 of yacc.c  */
-#line 64 "parser.tab.h"
+#line 87 "parser.tab.h"
 } YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */

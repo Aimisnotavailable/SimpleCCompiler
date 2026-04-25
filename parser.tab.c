@@ -70,64 +70,177 @@
 /* Line 189 of yacc.c  */
 #line 1 "parser.y"
 
+/* ============================================================
+   parser.y – Complete compiler front‑end with TAC generation
+   ============================================================ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 
-void yyerror(const char *s);
-int yylex(void);
+#ifndef VARTYPE_DEFINED
+#define VARTYPE_DEFINED
+typedef enum { VAR_INT, VAR_FLOAT } VarType;
+#endif
 
-/* Simple symbol table for ints */
+/* ------------------------------------------------------------------
+   Forward declarations for the backend (code generator)
+   ------------------------------------------------------------------ */
+void generate_emu8086(const char *filename);
+
+
+/* ------------------------------------------------------------------
+   AST Node definitions
+   ------------------------------------------------------------------ */
+typedef enum {
+    NODE_INT, NODE_FLOAT, NODE_ID,
+    NODE_ADD, NODE_LT,
+    NODE_ASSIGN,
+    NODE_PRINTF,
+    NODE_BLOCK,
+    NODE_LOOP
+} NodeKind;
+
+typedef struct ASTNode {
+    NodeKind kind;
+    union {
+        int    ival;                    /* NODE_INT */
+        float  fval;                    /* NODE_FLOAT */
+        char  *sval;                    /* NODE_ID */
+        struct {
+            struct ASTNode *left, *right;
+        } bin;                          /* NODE_ADD, NODE_LT */
+        struct {
+            char *name;
+            struct ASTNode *expr;
+        } assign;                       /* NODE_ASSIGN */
+        struct {
+            char *fmt;
+            struct ASTNode *expr;
+        } print;                        /* NODE_PRINTF */
+        struct {
+            struct ASTNode *body, *cond;
+        } loop;                         /* NODE_LOOP */
+        struct {
+            struct ASTNode **stmts;
+            int cnt;
+        } block;                        /* NODE_BLOCK */
+    } d;
+} ASTNode;
+
+void generate_ast_dot(ASTNode *root, const char *filename);
+
+/* Constructor prototypes */
+ASTNode* make_int(int val);
+ASTNode* make_float(float val);
+ASTNode* make_id(char *name);
+ASTNode* make_add(ASTNode *l, ASTNode *r);
+ASTNode* make_lt(ASTNode *l, ASTNode *r);
+ASTNode* make_assign(char *name, ASTNode *expr);
+ASTNode* make_printf(char *fmt, ASTNode *expr);
+ASTNode* make_block(ASTNode **stmts, int cnt);
+ASTNode* make_loop(ASTNode *body, ASTNode *cond);
+void append_stmt(ASTNode *block, ASTNode *stmt);
+
+/* ------------------------------------------------------------------
+   Symbol table (global scope only)
+   ------------------------------------------------------------------ */
 typedef struct {
     char *name;
-    int value;
-} Var;
+    VarType type;
+    ASTNode *init;   /* initialiser expression, NULL if none */
+    int is_temp;     /* 1 if temporary variable */
+} Symbol;
 
-#define MAX_VARS 128
-static Var vars[MAX_VARS];
-static int var_count = 0;
+#define MAX_SYMBOLS 200
+Symbol symtab[MAX_SYMBOLS];
+int sym_cnt = 0;
 
-static int find_var(const char *name) {
-    for (int i = 0; i < var_count; ++i) {
-        if (strcmp(vars[i].name, name) == 0) return i;
-    }
-    return -1;
+int  sym_insert(char *name, VarType type, ASTNode *init, int is_temp);
+Symbol* sym_lookup(char *name);
+VarType sym_get_type(char *name);
+
+/* ------------------------------------------------------------------
+   Type inference for expressions
+   ------------------------------------------------------------------ */
+VarType node_type(ASTNode *n);
+
+/* ------------------------------------------------------------------
+   Three‑address code (TAC) structures and globals
+   ------------------------------------------------------------------ */
+typedef enum {
+    OP_ADD, OP_LT, OP_ASSIGN,
+    OP_PRINT_INT, OP_PRINT_FLOAT,
+    OP_LABEL, OP_JMP, OP_JMPTRUE, OP_HALT
+} OpCode;
+
+typedef struct {
+    OpCode op;
+    char *dest;
+    char *src1;
+    char *src2;
+    VarType dest_type;      /* type of result (for ADD) */
+} Quad;
+
+#define MAX_QUADS 500
+Quad quads[MAX_QUADS];
+int nquad = 0;
+
+/* For constants and labels */
+typedef struct {
+    char *label;
+    VarType type;
+    union {
+        int ival;
+        float fval;
+    } val;
+} Constant;
+
+#define MAX_CONST 100
+Constant const_pool[MAX_CONST];
+int nconst = 0;
+
+int temp_counter = 0;
+int label_counter = 0;
+
+/* TAC helpers */
+void emit_quad(OpCode op, char *dest, char *src1, char *src2, VarType dest_type);
+char* new_temp(VarType type);
+char* new_label(void);
+char* new_int_const(int val);
+char* new_float_const(float val);
+
+/* Forward declarations for TAC generation */
+char* gen_expr(ASTNode *node);
+void  gen_stmt(ASTNode *stmt);
+void  gen_program(ASTNode *root);
+
+/* ------------------------------------------------------------------
+   Root of the AST, set during parsing
+   ------------------------------------------------------------------ */
+ASTNode *ast_root = NULL;
+
+/* ------------------------------------------------------------------
+   Error counter
+   ------------------------------------------------------------------ */
+int error_count = 0;
+
+/* Override yyerror to count errors */
+void yyerror(const char *msg) {
+    fprintf(stderr, "Syntax error: %s\n", msg);
+    error_count++;
 }
 
-static void set_var(const char *name, int value) {
-    int idx = find_var(name);
-    if (idx >= 0) {
-        vars[idx].value = value;
-    } else {
-        if (var_count < MAX_VARS) {
-            vars[var_count].name = strdup(name);
-            vars[var_count].value = value;
-            ++var_count;
-        } else {
-            fprintf(stderr, "Symbol table full\n");
-        }
-    }
-}
-
-static int get_var_value(const char *name, int *out) {
-    int idx = find_var(name);
-    if (idx >= 0) {
-        *out = vars[idx].value;
-        return 1;
-    }
-    return 0;
-}
-
-static void print_vars(void) {
-    for (int i = 0; i < var_count; ++i) {
-        printf("%s = %d\n", vars[i].name, vars[i].value);
-    }
-}
-
+/* ------------------------------------------------------------------
+   Flex / Bison interface
+   ------------------------------------------------------------------ */
+extern int yylex();
+extern int yyparse();
+extern FILE *yyin;
 
 
 /* Line 189 of yacc.c  */
-#line 131 "parser.tab.c"
+#line 244 "parser.tab.c"
 
 /* Enabling traces.  */
 #ifndef YYDEBUG
@@ -147,6 +260,20 @@ static void print_vars(void) {
 # define YYTOKEN_TABLE 0
 #endif
 
+/* "%code requires" blocks.  */
+
+/* Line 209 of yacc.c  */
+#line 171 "parser.y"
+
+    #ifndef VARTYPE_DEFINED
+    #define VARTYPE_DEFINED
+    typedef enum { VAR_INT, VAR_FLOAT } VarType;
+    #endif
+
+
+
+/* Line 209 of yacc.c  */
+#line 277 "parser.tab.c"
 
 /* Tokens.  */
 #ifndef YYTOKENTYPE
@@ -154,9 +281,15 @@ static void print_vars(void) {
    /* Put the tokens into the symbol table, so that GDB and other debuggers
       know about them.  */
    enum yytokentype {
-     NUMBER = 258,
-     ID = 259,
-     INT = 260
+     INT = 258,
+     FLOAT = 259,
+     DO = 260,
+     WHILE = 261,
+     PRINTF = 262,
+     ID = 263,
+     STRING = 264,
+     INT_NUM = 265,
+     FLOAT_NUM = 266
    };
 #endif
 
@@ -167,15 +300,18 @@ typedef union YYSTYPE
 {
 
 /* Line 214 of yacc.c  */
-#line 58 "parser.y"
+#line 182 "parser.y"
 
-    int num;
-    char *id;
+    int    ival;          /* INT_NUM */
+    float  fval;          /* FLOAT_NUM */
+    char  *str;           /* ID, STRING */
+    struct ASTNode *node; /* expressions and statements */
+    VarType dtype;        /* for Type nonterminal */
 
 
 
 /* Line 214 of yacc.c  */
-#line 179 "parser.tab.c"
+#line 315 "parser.tab.c"
 } YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
@@ -187,7 +323,7 @@ typedef union YYSTYPE
 
 
 /* Line 264 of yacc.c  */
-#line 191 "parser.tab.c"
+#line 327 "parser.tab.c"
 
 #ifdef short
 # undef short
@@ -400,22 +536,22 @@ union yyalloc
 #endif
 
 /* YYFINAL -- State number of the termination state.  */
-#define YYFINAL  2
+#define YYFINAL  3
 /* YYLAST -- Last index in YYTABLE.  */
-#define YYLAST   11
+#define YYLAST   45
 
 /* YYNTOKENS -- Number of terminals.  */
-#define YYNTOKENS  8
+#define YYNTOKENS  21
 /* YYNNTS -- Number of nonterminals.  */
-#define YYNNTS  6
+#define YYNNTS  11
 /* YYNRULES -- Number of rules.  */
-#define YYNRULES  9
+#define YYNRULES  21
 /* YYNRULES -- Number of states.  */
-#define YYNSTATES  17
+#define YYNSTATES  48
 
 /* YYTRANSLATE(YYLEX) -- Bison symbol number corresponding to YYLEX.  */
 #define YYUNDEFTOK  2
-#define YYMAXUTOK   260
+#define YYMAXUTOK   266
 
 #define YYTRANSLATE(YYX)						\
   ((unsigned int) (YYX) <= YYMAXUTOK ? yytranslate[YYX] : YYUNDEFTOK)
@@ -427,15 +563,15 @@ static const yytype_uint8 yytranslate[] =
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
-       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
-       2,     2,     2,     2,     2,     2,     2,     2,     2,     7,
-       2,     6,     2,     2,     2,     2,     2,     2,     2,     2,
-       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
-       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+      18,    19,     2,    13,    20,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,    15,
+      12,    14,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,    16,     2,    17,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
@@ -449,7 +585,7 @@ static const yytype_uint8 yytranslate[] =
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
        2,     2,     2,     2,     2,     2,     1,     2,     3,     4,
-       5
+       5,     6,     7,     8,     9,    10,    11
 };
 
 #if YYDEBUG
@@ -457,21 +593,30 @@ static const yytype_uint8 yytranslate[] =
    YYRHS.  */
 static const yytype_uint8 yyprhs[] =
 {
-       0,     0,     3,     4,     7,     9,    11,    17,    22,    24
+       0,     0,     3,     6,     7,    10,    16,    18,    20,    30,
+      31,    34,    38,    40,    45,    53,    57,    61,    63,    65,
+      67,    69
 };
 
 /* YYRHS -- A `-1'-separated list of the rules' RHS.  */
 static const yytype_int8 yyrhs[] =
 {
-       9,     0,    -1,    -1,     9,    10,    -1,    11,    -1,    12,
-      -1,     5,     4,     6,    13,     7,    -1,     4,     6,    13,
-       7,    -1,     3,    -1,     4,    -1
+      22,     0,    -1,    23,    26,    -1,    -1,    23,    24,    -1,
+      25,     8,    14,    30,    15,    -1,     3,    -1,     4,    -1,
+       5,    16,    27,    17,     6,    18,    30,    19,    15,    -1,
+      -1,    27,    28,    -1,    27,     1,    15,    -1,    29,    -1,
+       8,    14,    30,    15,    -1,     7,    18,     9,    20,    30,
+      19,    15,    -1,    30,    13,    30,    -1,    30,    12,    30,
+      -1,    31,    -1,     8,    -1,    10,    -1,    11,    -1,    18,
+      30,    19,    -1
 };
 
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
-static const yytype_uint8 yyrline[] =
+static const yytype_uint16 yyrline[] =
 {
-       0,    75,    75,    77,    81,    82,    86,    93,   100,   101
+       0,   209,   209,   213,   214,   218,   227,   228,   232,   237,
+     238,   239,   243,   244,   260,   275,   276,   277,   281,   282,
+     283,   284
 };
 #endif
 
@@ -480,8 +625,11 @@ static const yytype_uint8 yyrline[] =
    First, the terminals, then, starting at YYNTOKENS, nonterminals.  */
 static const char *const yytname[] =
 {
-  "$end", "error", "$undefined", "NUMBER", "ID", "INT", "'='", "';'",
-  "$accept", "program", "stmt", "decl_stmt", "assign_stmt", "expr", 0
+  "$end", "error", "$undefined", "INT", "FLOAT", "DO", "WHILE", "PRINTF",
+  "ID", "STRING", "INT_NUM", "FLOAT_NUM", "'<'", "'+'", "'='", "';'",
+  "'{'", "'}'", "'('", "')'", "','", "$accept", "Program", "DeclList",
+  "Declaration", "Type", "DoWhileStmt", "StmtList", "Stmt", "PrintfStmt",
+  "Expr", "Term", 0
 };
 #endif
 
@@ -490,20 +638,26 @@ static const char *const yytname[] =
    token YYLEX-NUM.  */
 static const yytype_uint16 yytoknum[] =
 {
-       0,   256,   257,   258,   259,   260,    61,    59
+       0,   256,   257,   258,   259,   260,   261,   262,   263,   264,
+     265,   266,    60,    43,    61,    59,   123,   125,    40,    41,
+      44
 };
 # endif
 
 /* YYR1[YYN] -- Symbol number of symbol that rule YYN derives.  */
 static const yytype_uint8 yyr1[] =
 {
-       0,     8,     9,     9,    10,    10,    11,    12,    13,    13
+       0,    21,    22,    23,    23,    24,    25,    25,    26,    27,
+      27,    27,    28,    28,    29,    30,    30,    30,    31,    31,
+      31,    31
 };
 
 /* YYR2[YYN] -- Number of symbols composing right hand side of rule YYN.  */
 static const yytype_uint8 yyr2[] =
 {
-       0,     2,     0,     2,     1,     1,     5,     4,     1,     1
+       0,     2,     2,     0,     2,     5,     1,     1,     9,     0,
+       2,     3,     1,     4,     7,     3,     3,     1,     1,     1,
+       1,     3
 };
 
 /* YYDEFACT[STATE-NAME] -- Default rule to reduce with in state
@@ -511,29 +665,37 @@ static const yytype_uint8 yyr2[] =
    means the default is an error.  */
 static const yytype_uint8 yydefact[] =
 {
-       2,     0,     1,     0,     0,     3,     4,     5,     0,     0,
-       8,     9,     0,     0,     7,     0,     6
+       3,     0,     0,     1,     6,     7,     0,     4,     0,     2,
+       9,     0,     0,     0,     0,     0,     0,     0,    10,    12,
+      18,    19,    20,     0,     0,    17,    11,     0,     0,     0,
+       0,     0,     0,     5,     0,     0,     0,    21,    16,    15,
+       0,    13,     0,     0,     0,     0,     8,    14
 };
 
 /* YYDEFGOTO[NTERM-NUM].  */
 static const yytype_int8 yydefgoto[] =
 {
-      -1,     1,     5,     6,     7,    12
+      -1,     1,     2,     7,     8,     9,    12,    18,    19,    24,
+      25
 };
 
 /* YYPACT[STATE-NUM] -- Index in YYTABLE of the portion describing
    STATE-NUM.  */
-#define YYPACT_NINF -6
+#define YYPACT_NINF -24
 static const yytype_int8 yypact[] =
 {
-      -6,     0,    -6,    -3,     2,    -6,    -6,    -6,    -2,     1,
-      -6,    -6,     3,    -2,    -6,     4,    -6
+     -24,     7,    -2,   -24,   -24,   -24,   -10,   -24,     8,   -24,
+     -24,    18,     3,     4,    21,    20,    25,    15,   -24,   -24,
+     -24,   -24,   -24,     4,    16,   -24,   -24,    31,     4,    23,
+       6,     4,     4,   -24,    24,    22,     4,   -24,    29,   -24,
+       4,   -24,    11,    14,    28,    30,   -24,   -24
 };
 
 /* YYPGOTO[NTERM-NUM].  */
 static const yytype_int8 yypgoto[] =
 {
-      -6,    -6,    -6,    -6,    -6,    -5
+     -24,   -24,   -24,   -24,   -24,   -24,   -24,   -24,   -24,   -23,
+     -24
 };
 
 /* YYTABLE[YYPACT[STATE-NUM]].  What to do in state STATE-NUM.  If
@@ -543,22 +705,31 @@ static const yytype_int8 yypgoto[] =
 #define YYTABLE_NINF -1
 static const yytype_uint8 yytable[] =
 {
-       2,    10,    11,     8,     3,     4,     9,    13,    15,     0,
-      14,    16
+      30,     4,     5,     6,    14,    35,    10,     3,    38,    39,
+      15,    16,    20,    42,    21,    22,    11,    43,    31,    32,
+      17,    29,    23,    31,    32,    37,    31,    32,    31,    32,
+      44,    33,    13,    45,    31,    32,    26,    41,    27,    28,
+      34,    36,    32,    46,    40,    47
 };
 
-static const yytype_int8 yycheck[] =
+static const yytype_uint8 yycheck[] =
 {
-       0,     3,     4,     6,     4,     5,     4,     6,    13,    -1,
-       7,     7
+      23,     3,     4,     5,     1,    28,    16,     0,    31,    32,
+       7,     8,     8,    36,    10,    11,     8,    40,    12,    13,
+      17,     6,    18,    12,    13,    19,    12,    13,    12,    13,
+      19,    15,    14,    19,    12,    13,    15,    15,    18,    14,
+       9,    18,    13,    15,    20,    15
 };
 
 /* YYSTOS[STATE-NUM] -- The (internal number of the) accessing
    symbol of state STATE-NUM.  */
 static const yytype_uint8 yystos[] =
 {
-       0,     9,     0,     4,     5,    10,    11,    12,     6,     4,
-       3,     4,    13,     6,     7,    13,     7
+       0,    22,    23,     0,     3,     4,     5,    24,    25,    26,
+      16,     8,    27,    14,     1,     7,     8,    17,    28,    29,
+       8,    10,    11,    18,    30,    31,    15,    18,    14,     6,
+      30,    12,    13,    15,     9,    30,    18,    19,    30,    30,
+      20,    15,    30,    30,    19,    19,    15,    15
 };
 
 #define yyerrok		(yyerrstatus = 0)
@@ -1369,53 +1540,154 @@ yyreduce:
   YY_REDUCE_PRINT (yyn);
   switch (yyn)
     {
-        case 6:
+        case 2:
 
 /* Line 1455 of yacc.c  */
-#line 86 "parser.y"
+#line 209 "parser.y"
+    { ast_root = (yyvsp[(2) - (2)].node); ;}
+    break;
+
+  case 3:
+
+/* Line 1455 of yacc.c  */
+#line 213 "parser.y"
+    { (yyval.node) = NULL; ;}
+    break;
+
+  case 5:
+
+/* Line 1455 of yacc.c  */
+#line 219 "parser.y"
     {
-        set_var((yyvsp[(2) - (5)].id), (yyvsp[(4) - (5)].num));
-        free((yyvsp[(2) - (5)].id));
-    ;}
+          if (!sym_insert((yyvsp[(2) - (5)].str), (yyvsp[(1) - (5)].dtype), (yyvsp[(4) - (5)].node), 0))
+              fprintf(stderr, "Semantic error: redeclaration of '%s'\n", (yyvsp[(2) - (5)].str));
+          /* Remember the expression for later initialisation code */
+      ;}
+    break;
+
+  case 6:
+
+/* Line 1455 of yacc.c  */
+#line 227 "parser.y"
+    { (yyval.dtype) = VAR_INT; ;}
     break;
 
   case 7:
 
 /* Line 1455 of yacc.c  */
-#line 93 "parser.y"
-    {
-        set_var((yyvsp[(1) - (4)].id), (yyvsp[(3) - (4)].num));
-        free((yyvsp[(1) - (4)].id));
-    ;}
+#line 228 "parser.y"
+    { (yyval.dtype) = VAR_FLOAT; ;}
     break;
 
   case 8:
 
 /* Line 1455 of yacc.c  */
-#line 100 "parser.y"
-    { (yyval.num) = (yyvsp[(1) - (1)].num); ;}
+#line 233 "parser.y"
+    { (yyval.node) = make_loop((yyvsp[(3) - (9)].node), (yyvsp[(7) - (9)].node)); ;}
     break;
 
   case 9:
 
 /* Line 1455 of yacc.c  */
-#line 101 "parser.y"
+#line 237 "parser.y"
+    { (yyval.node) = make_block(NULL, 0); ;}
+    break;
+
+  case 10:
+
+/* Line 1455 of yacc.c  */
+#line 238 "parser.y"
+    { append_stmt((yyvsp[(1) - (2)].node), (yyvsp[(2) - (2)].node)); (yyval.node) = (yyvsp[(1) - (2)].node); ;}
+    break;
+
+  case 11:
+
+/* Line 1455 of yacc.c  */
+#line 239 "parser.y"
+    { yyerrok; ;}
+    break;
+
+  case 13:
+
+/* Line 1455 of yacc.c  */
+#line 245 "parser.y"
     {
-        int val;
-        if (get_var_value((yyvsp[(1) - (1)].id), &val)) {
-            (yyval.num) = val;
-        } else {
-            fprintf(stderr, "Undefined variable %s, using 0\n", (yyvsp[(1) - (1)].id));
-            (yyval.num) = 0;
-        }
-        free((yyvsp[(1) - (1)].id));
-    ;}
+          Symbol *sym = sym_lookup((yyvsp[(1) - (4)].str));
+          if (!sym)
+              fprintf(stderr, "Semantic error: undeclared variable '%s'\n", (yyvsp[(1) - (4)].str));
+          else {
+              VarType lhs = sym->type;
+              VarType rhs = node_type((yyvsp[(3) - (4)].node));
+              if (lhs != rhs)
+                  fprintf(stderr, "Semantic error: type mismatch in assignment to '%s'\n", (yyvsp[(1) - (4)].str));
+          }
+          (yyval.node) = make_assign((yyvsp[(1) - (4)].str), (yyvsp[(3) - (4)].node));
+      ;}
+    break;
+
+  case 14:
+
+/* Line 1455 of yacc.c  */
+#line 261 "parser.y"
+    {
+          char *fmt = (yyvsp[(3) - (7)].str);
+          ASTNode *expr = (yyvsp[(5) - (7)].node);
+          VarType etype = node_type(expr);
+          int ok = 0;
+          if (strcmp(fmt, "\"%d\"") == 0 && etype == VAR_INT) ok = 1;
+          else if (strcmp(fmt, "\"%f\"") == 0 && etype == VAR_FLOAT) ok = 1;
+          if (!ok)
+              fprintf(stderr, "Semantic error: format/type mismatch in printf\n");
+          (yyval.node) = make_printf(fmt, expr);
+      ;}
+    break;
+
+  case 15:
+
+/* Line 1455 of yacc.c  */
+#line 275 "parser.y"
+    { (yyval.node) = make_add((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
+    break;
+
+  case 16:
+
+/* Line 1455 of yacc.c  */
+#line 276 "parser.y"
+    { (yyval.node) = make_lt((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
+    break;
+
+  case 18:
+
+/* Line 1455 of yacc.c  */
+#line 281 "parser.y"
+    { (yyval.node) = make_id((yyvsp[(1) - (1)].str)); ;}
+    break;
+
+  case 19:
+
+/* Line 1455 of yacc.c  */
+#line 282 "parser.y"
+    { (yyval.node) = make_int((yyvsp[(1) - (1)].ival)); ;}
+    break;
+
+  case 20:
+
+/* Line 1455 of yacc.c  */
+#line 283 "parser.y"
+    { (yyval.node) = make_float((yyvsp[(1) - (1)].fval)); ;}
+    break;
+
+  case 21:
+
+/* Line 1455 of yacc.c  */
+#line 284 "parser.y"
+    { (yyval.node) = (yyvsp[(2) - (3)].node); ;}
     break;
 
 
 
 /* Line 1455 of yacc.c  */
-#line 1419 "parser.tab.c"
+#line 1691 "parser.tab.c"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -1627,19 +1899,402 @@ yyreturn:
 
 
 /* Line 1675 of yacc.c  */
-#line 113 "parser.y"
+#line 287 "parser.y"
 
 
-void yyerror(const char *s) {
-    fprintf(stderr, "Parse error: %s\n", s);
+/* ============================================================
+   AST constructors
+   ============================================================ */
+ASTNode* make_node(NodeKind kind) {
+    ASTNode *n = (ASTNode*)malloc(sizeof(ASTNode));
+    n->kind = kind;
+    return n;
 }
 
-int main(void) {
-    if (yyparse() == 0) {
-        print_vars();
-        return 0;
+ASTNode* make_int(int val) {
+    ASTNode *n = make_node(NODE_INT);
+    n->d.ival = val;
+    return n;
+}
+
+ASTNode* make_float(float val) {
+    ASTNode *n = make_node(NODE_FLOAT);
+    n->d.fval = val;
+    return n;
+}
+
+ASTNode* make_id(char *name) {
+    ASTNode *n = make_node(NODE_ID);
+    n->d.sval = strdup(name);
+    return n;
+}
+
+ASTNode* make_add(ASTNode *l, ASTNode *r) {
+    ASTNode *n = make_node(NODE_ADD);
+    n->d.bin.left = l;
+    n->d.bin.right = r;
+    return n;
+}
+
+ASTNode* make_lt(ASTNode *l, ASTNode *r) {
+    ASTNode *n = make_node(NODE_LT);
+    n->d.bin.left = l;
+    n->d.bin.right = r;
+    return n;
+}
+
+ASTNode* make_assign(char *name, ASTNode *expr) {
+    ASTNode *n = make_node(NODE_ASSIGN);
+    n->d.assign.name = strdup(name);
+    n->d.assign.expr = expr;
+    return n;
+}
+
+ASTNode* make_printf(char *fmt, ASTNode *expr) {
+    ASTNode *n = make_node(NODE_PRINTF);
+    n->d.print.fmt = strdup(fmt);
+    n->d.print.expr = expr;
+    return n;
+}
+
+ASTNode* make_block(ASTNode **stmts, int cnt) {
+    ASTNode *n = make_node(NODE_BLOCK);
+    if (cnt > 0) {
+        n->d.block.stmts = malloc(cnt * sizeof(ASTNode*));
+        memcpy(n->d.block.stmts, stmts, cnt * sizeof(ASTNode*));
+        n->d.block.cnt = cnt;
     } else {
-        return 1;
+        n->d.block.stmts = NULL;
+        n->d.block.cnt = 0;
+    }
+    return n;
+}
+
+void append_stmt(ASTNode *block, ASTNode *stmt) {
+    if (!block || block->kind != NODE_BLOCK) return;
+    block->d.block.stmts = realloc(block->d.block.stmts,
+                                   (block->d.block.cnt + 1) * sizeof(ASTNode*));
+    block->d.block.stmts[block->d.block.cnt++] = stmt;
+}
+
+ASTNode* make_loop(ASTNode *body, ASTNode *cond) {
+    ASTNode *n = make_node(NODE_LOOP);
+    n->d.loop.body = body;
+    n->d.loop.cond = cond;
+    return n;
+}
+
+/* ============================================================
+   Symbol table operations
+   ============================================================ */
+int sym_insert(char *name, VarType type, ASTNode *init, int is_temp) {
+    for (int i = 0; i < sym_cnt; i++)
+        if (strcmp(symtab[i].name, name) == 0)
+            return 0;               /* duplicate */
+    if (sym_cnt >= MAX_SYMBOLS) {
+        fprintf(stderr, "Symbol table overflow!\n");
+        exit(1);
+    }
+    symtab[sym_cnt].name = strdup(name);
+    symtab[sym_cnt].type = type;
+    symtab[sym_cnt].init = init;
+    symtab[sym_cnt].is_temp = is_temp;
+    sym_cnt++;
+    return 1;
+}
+
+Symbol* sym_lookup(char *name) {
+    for (int i = 0; i < sym_cnt; i++)
+        if (strcmp(symtab[i].name, name) == 0)
+            return &symtab[i];
+    return NULL;
+}
+
+VarType sym_get_type(char *name) {
+    Symbol *s = sym_lookup(name);
+    return s ? s->type : VAR_INT;
+}
+
+/* ============================================================
+   Type inference for AST nodes
+   ============================================================ */
+VarType node_type(ASTNode *n) {
+    switch (n->kind) {
+        case NODE_INT:   return VAR_INT;
+        case NODE_FLOAT: return VAR_FLOAT;
+        case NODE_ID:    return sym_get_type(n->d.sval);
+        case NODE_ADD: {
+            VarType t1 = node_type(n->d.bin.left);
+            VarType t2 = node_type(n->d.bin.right);
+            return (t1 == VAR_FLOAT || t2 == VAR_FLOAT) ? VAR_FLOAT : VAR_INT;
+        }
+        case NODE_LT:    return VAR_INT;  /* comparison yields int (boolean) */
+        default:         return VAR_INT;
     }
 }
 
+/* ============================================================
+   Three‑address code generation
+   ============================================================ */
+void emit_quad(OpCode op, char *dest, char *src1, char *src2, VarType type) {
+    if (nquad >= MAX_QUADS) {
+        fprintf(stderr, "Too many quads!\n");
+        exit(1);
+    }
+    quads[nquad].op = op;
+    quads[nquad].dest = dest ? strdup(dest) : NULL;
+    quads[nquad].src1 = src1 ? strdup(src1) : NULL;
+    quads[nquad].src2 = src2 ? strdup(src2) : NULL;
+    quads[nquad].dest_type = type;
+    nquad++;
+}
+
+char* new_temp(VarType type) {
+    char buf[20];
+    sprintf(buf, "_t%d", temp_counter++);
+    sym_insert(buf, type, NULL, 1);  /* register as temporary */
+    return strdup(buf);
+}
+
+char* new_label(void) {
+    char buf[20];
+    sprintf(buf, "L%d", label_counter++);
+    return strdup(buf);
+}
+
+char* new_int_const(int val) {
+    char buf[20];
+    sprintf(buf, "_ci%d", nconst);
+    const_pool[nconst].label = strdup(buf);
+    const_pool[nconst].type = VAR_INT;
+    const_pool[nconst].val.ival = val;
+    nconst++;
+    return strdup(buf);
+}
+
+char* new_float_const(float val) {
+    char buf[20];
+    sprintf(buf, "_cf%d", nconst);
+    const_pool[nconst].label = strdup(buf);
+    const_pool[nconst].type = VAR_FLOAT;
+    const_pool[nconst].val.fval = val;
+    nconst++;
+    return strdup(buf);
+}
+
+char* gen_expr(ASTNode *node) {
+    switch (node->kind) {
+        case NODE_INT:   return new_int_const(node->d.ival);
+        case NODE_FLOAT: return new_float_const(node->d.fval);
+        case NODE_ID: {
+            if (!sym_lookup(node->d.sval))
+                return strdup("_error_");
+            return strdup(node->d.sval);
+        }
+        case NODE_ADD: {
+            char *left = gen_expr(node->d.bin.left);
+            char *right = gen_expr(node->d.bin.right);
+            VarType type = node_type(node);
+            char *dest = new_temp(type);
+            emit_quad(OP_ADD, dest, left, right, type);
+            return dest;
+        }
+        case NODE_LT: {
+            char *left = gen_expr(node->d.bin.left);
+            char *right = gen_expr(node->d.bin.right);
+            char *dest = new_temp(VAR_INT);
+            emit_quad(OP_LT, dest, left, right, VAR_INT);
+            return dest;
+        }
+        default:
+            fprintf(stderr, "Internal error: bad expr node\n");
+            return strdup("_error_");
+    }
+}
+
+void gen_stmt(ASTNode *stmt) {
+    if (!stmt) return;
+    switch (stmt->kind) {
+        case NODE_ASSIGN: {
+            char *rhs = gen_expr(stmt->d.assign.expr);
+            VarType type = sym_get_type(stmt->d.assign.name);
+            emit_quad(OP_ASSIGN, stmt->d.assign.name, rhs, NULL, type);
+            break;
+        }
+        case NODE_PRINTF: {
+            ASTNode *expr = stmt->d.print.expr;
+            char *arg = gen_expr(expr);
+            if (strstr(stmt->d.print.fmt, "%d"))
+                emit_quad(OP_PRINT_INT, NULL, arg, NULL, VAR_INT);
+            else
+                emit_quad(OP_PRINT_FLOAT, NULL, arg, NULL, VAR_FLOAT);
+            break;
+        }
+        case NODE_BLOCK:
+            for (int i = 0; i < stmt->d.block.cnt; i++)
+                gen_stmt(stmt->d.block.stmts[i]);
+            break;
+        case NODE_LOOP: {
+            char *start = new_label();
+            emit_quad(OP_LABEL, start, NULL, NULL, 0);
+            gen_stmt(stmt->d.loop.body);
+            char *cond = gen_expr(stmt->d.loop.cond);
+            emit_quad(OP_JMPTRUE, NULL, cond, start, 0);
+            break;
+        }
+        default:
+            fprintf(stderr, "Internal error: bad stmt node\n");
+    }
+}
+
+void gen_program(ASTNode *root) {
+    /* First, generate initialisation code for declared variables */
+    for (int i = 0; i < sym_cnt; i++) {
+        if (symtab[i].is_temp) continue;  /* skip temporaries */
+        if (symtab[i].init) {
+            char *rhs = gen_expr(symtab[i].init);
+            emit_quad(OP_ASSIGN, symtab[i].name, rhs, NULL, symtab[i].type);
+        } else {
+            /* Default initialisation: 0 for int, 0.0 for float */
+            if (symtab[i].type == VAR_INT)
+                emit_quad(OP_ASSIGN, symtab[i].name, new_int_const(0), NULL, VAR_INT);
+            else
+                emit_quad(OP_ASSIGN, symtab[i].name, new_float_const(0.0f), NULL, VAR_FLOAT);
+        }
+    }
+    /* Then the program body */
+    gen_stmt(root);
+    emit_quad(OP_HALT, NULL, NULL, NULL, 0);
+}
+
+/* ------------------------------------------------------------------
+   AST visualisation – Graphviz DOT format
+   ------------------------------------------------------------------ */
+static int node_id_counter = 0;
+
+static void ast_to_dot_rec(FILE *f, ASTNode *n, int parent_id) {
+    if (!n) return;
+    int my_id = node_id_counter++;
+    const char *shape = "ellipse";
+    char label[256] = "";
+
+    switch (n->kind) {
+        case NODE_INT:
+            snprintf(label, sizeof(label), "INT(%d)", n->d.ival);
+            shape = "box";
+            break;
+        case NODE_FLOAT:
+            snprintf(label, sizeof(label), "FLOAT(%g)", n->d.fval);
+            shape = "box";
+            break;
+        case NODE_ID:
+            snprintf(label, sizeof(label), "ID(%s)", n->d.sval);
+            shape = "box";
+            break;
+        case NODE_ADD:
+            snprintf(label, sizeof(label), "ADD");
+            break;
+        case NODE_LT:
+            snprintf(label, sizeof(label), "LT");
+            break;
+        case NODE_ASSIGN:
+            snprintf(label, sizeof(label), "ASSIGN(%s)", n->d.assign.name);
+            break;
+        case NODE_PRINTF:
+            snprintf(label, sizeof(label), "PRINTF(%s)", n->d.print.fmt);
+            shape = "diamond";
+            break;
+        case NODE_BLOCK:
+            snprintf(label, sizeof(label), "BLOCK[%d]", n->d.block.cnt);
+            shape = "tab";
+            break;
+        case NODE_LOOP:
+            snprintf(label, sizeof(label), "DO-WHILE");
+            shape = "house";
+            break;
+        default:
+            snprintf(label, sizeof(label), "???");
+            break;
+    }
+
+    fprintf(f, "  n%d [label=\"%s\", shape=%s];\n", my_id, label, shape);
+    if (parent_id >= 0)
+        fprintf(f, "  n%d -> n%d;\n", parent_id, my_id);
+
+    /* Add children according to node kind */
+    switch (n->kind) {
+        case NODE_ADD:
+        case NODE_LT:
+            ast_to_dot_rec(f, n->d.bin.left, my_id);
+            ast_to_dot_rec(f, n->d.bin.right, my_id);
+            break;
+        case NODE_ASSIGN:
+            ast_to_dot_rec(f, n->d.assign.expr, my_id);
+            break;
+        case NODE_PRINTF:
+            ast_to_dot_rec(f, n->d.print.expr, my_id);
+            break;
+        case NODE_BLOCK:
+            for (int i = 0; i < n->d.block.cnt; i++)
+                ast_to_dot_rec(f, n->d.block.stmts[i], my_id);
+            break;
+        case NODE_LOOP:
+            ast_to_dot_rec(f, n->d.loop.body, my_id);
+            ast_to_dot_rec(f, n->d.loop.cond, my_id);
+            break;
+        default:
+            break;  /* leaf nodes */
+    }
+}
+
+void generate_ast_dot(ASTNode *root, const char *filename) {
+    if (!root) return;
+    FILE *f = fopen(filename, "w");
+    if (!f) {
+        perror(filename);
+        return;
+    }
+    node_id_counter = 0;
+    fprintf(f, "digraph AST {\n");
+    fprintf(f, "  node [fontname=\"Courier\"];\n");
+    ast_to_dot_rec(f, root, -1);
+    fprintf(f, "}\n");
+    fclose(f);
+    printf("AST written to %s\n", filename);
+}
+
+/* ============================================================
+   Main driver – parse, generate TAC, call backend
+   ============================================================ */
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <source-file>\n", argv[0]);
+        return 1;
+    }
+    FILE *f = fopen(argv[1], "r");
+    if (!f) {
+        perror(argv[1]);
+        return 1;
+    }
+    yyin = f;
+    yyparse();
+    fclose(f);
+
+    if (error_count > 0) {
+        fprintf(stderr, "Compilation aborted due to errors.\n");
+        return 1;
+    }
+
+    /* Generate TAC */
+    gen_program(ast_root);
+
+    /* Generate Graphviz .dot file */
+    if (ast_root) {
+        generate_ast_dot(ast_root, "ast.dot");
+    }   
+
+    /* Write emu8086 assembly */
+    generate_emu8086("output.asm");
+
+    return 0;
+}
