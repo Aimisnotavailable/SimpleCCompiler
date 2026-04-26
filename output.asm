@@ -1,18 +1,16 @@
 DATA SEGMENT
     ; User variables
-    x               DW 0
+    t0              DW 0
 
     ; Temporaries
     _t0             DW 0
     _t1             DW 0
 
     ; Constants
-    _ci0            DW 0
-    _cf1            DB '3.14', '$'
-    _cf2            DB '31.40', '$'
-    _ci3            DW 12
-    _ci4            DW 1
-    _ci5            DW 5
+    _ci0            DW 1
+    _ci1            DW 1
+    _ci2            DW 0
+    _ci3            DW 5
 DATA ENDS
 
 CODE SEGMENT
@@ -21,37 +19,19 @@ START:
     MOV AX, DATA
     MOV DS, AX
     MOV AX, [_ci0]
-    MOV [x], AX
+    MOV [t0], AX
 L0:
-    MOV DX, OFFSET _cf1
-    MOV AH, 09h
-    INT 21h
-    MOV DL, 0Dh
-    MOV AH, 2
-    INT 21h
-    MOV DL, 0Ah
-    MOV AH, 2
-    INT 21h
-    MOV DX, OFFSET _cf2
-    MOV AH, 09h
-    INT 21h
-    MOV DL, 0Dh
-    MOV AH, 2
-    INT 21h
-    MOV DL, 0Ah
-    MOV AH, 2
-    INT 21h
-    MOV AX, [_ci3]
-    CALL PRINT_INT
-    MOV AX, [x]
-    CALL PRINT_INT
-    MOV AX, [x]
-    ADD AX, [_ci4]
+    MOV AX, [t0]
+    ADD AX, [_ci1]
     MOV [_t0], AX
     MOV AX, [_t0]
-    MOV [x], AX
-    MOV AX, [x]
-    CMP AX, [_ci5]
+    MOV [t0], AX
+    MOV AX, [t0]
+    CALL PRINT_INT
+    MOV AX, [_ci2]
+    MOV [t0], AX
+    MOV AX, [t0]
+    CMP AX, [_ci3]
     JL L_true0
     MOV WORD PTR [_t1], 0
     JMP L_end0

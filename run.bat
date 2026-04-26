@@ -13,8 +13,8 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Show the AST tree
-start "" ast.png
+@REM :: Show the AST tree
+@REM start "" ast.png
 
-:: Open output.asm in emu8086 and run it
-start "" "C:\Users\User\Desktop\Folders_main\Tools\Assembly\emu8086\emu8086.exe" "C:\Projects\SimpleCCompiler\output.asm"
+@REM :: Open output.asm in emu8086 and run it
+@REM start "" "C:\Users\User\Desktop\Folders_main\Tools\Assembly\emu8086\emu8086.exe" "C:\Projects\SimpleCCompiler\output.asm"

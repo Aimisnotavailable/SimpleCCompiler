@@ -35,7 +35,7 @@
 /* "%code requires" blocks.  */
 
 /* Line 1676 of yacc.c  */
-#line 142 "parser.y"
+#line 143 "parser.y"
 
     #ifndef VARTYPE_DEFINED
     #define VARTYPE_DEFINED
@@ -72,7 +72,7 @@ typedef union YYSTYPE
 {
 
 /* Line 1676 of yacc.c  */
-#line 153 "parser.y"
+#line 154 "parser.y"
 
     int    ival;          /* INT_NUM */
     float  fval;          /* FLOAT_NUM */

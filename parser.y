@@ -137,6 +137,7 @@ void yyerror(const char *msg) {
 extern int yylex();
 extern int yyparse();
 extern FILE *yyin;
+
 %}
 
 %code requires {
@@ -188,9 +189,10 @@ DeclList
 Declaration
     : Type ID '=' Expr ';'
       {
-          if (!sym_insert($2, $1, $4, 0))
+          if (!sym_insert($2, $1, $4, 0)) {
               fprintf(stderr, "Semantic error: redeclaration of '%s'\n", $2);
-          /* Remember the expression for later initialisation code */
+              error_count++;
+          }
       }
     ;
 
@@ -215,13 +217,16 @@ Stmt
     | ID '=' Expr ';'
       {
           Symbol *sym = sym_lookup($1);
-          if (!sym)
+          if (!sym) {
               fprintf(stderr, "Semantic error: undeclared variable '%s'\n", $1);
-          else {
+              error_count++;
+          } else {
               VarType lhs = sym->type;
               VarType rhs = node_type($3);
-              if (lhs != rhs)
+              if (lhs != rhs) {
                   fprintf(stderr, "Semantic error: type mismatch in assignment to '%s'\n", $1);
+                  error_count++;
+              }
           }
           $$ = make_assign($1, $3);
       }
@@ -236,8 +241,10 @@ PrintfStmt
           int ok = 0;
           if (strcmp(fmt, "\"%d\"") == 0 && etype == VAR_INT) ok = 1;
           else if (strcmp(fmt, "\"%f\"") == 0 && etype == VAR_FLOAT) ok = 1;
-          if (!ok)
+          if (!ok) {
               fprintf(stderr, "Semantic error: format/type mismatch in printf\n");
+              error_count++;
+          }
           $$ = make_printf(fmt, expr);
       }
     ;
@@ -249,7 +256,17 @@ Expr
     ;
 
 Term
-    : ID               { $$ = make_id($1); }
+    : ID
+      {
+          if (!sym_lookup($1)) {
+              fprintf(stderr, "Semantic error: undeclared variable '%s'\n", $1);
+              error_count++;
+              /* Provide a safe dummy node so further checks don't crash */
+              $$ = make_int(0);
+          } else {
+              $$ = make_id($1);
+          }
+      }
     | INT_NUM          { $$ = make_int($1); }
     | FLOAT_NUM        { $$ = make_float($1); }
     | '(' Expr ')'     { $$ = $2; }

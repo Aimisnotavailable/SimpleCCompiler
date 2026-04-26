@@ -210,8 +210,9 @@ extern int yyparse();
 extern FILE *yyin;
 
 
+
 /* Line 189 of yacc.c  */
-#line 215 "parser.tab.c"
+#line 216 "parser.tab.c"
 
 /* Enabling traces.  */
 #ifndef YYDEBUG
@@ -234,7 +235,7 @@ extern FILE *yyin;
 /* "%code requires" blocks.  */
 
 /* Line 209 of yacc.c  */
-#line 142 "parser.y"
+#line 143 "parser.y"
 
     #ifndef VARTYPE_DEFINED
     #define VARTYPE_DEFINED
@@ -244,7 +245,7 @@ extern FILE *yyin;
 
 
 /* Line 209 of yacc.c  */
-#line 248 "parser.tab.c"
+#line 249 "parser.tab.c"
 
 /* Tokens.  */
 #ifndef YYTOKENTYPE
@@ -271,7 +272,7 @@ typedef union YYSTYPE
 {
 
 /* Line 214 of yacc.c  */
-#line 153 "parser.y"
+#line 154 "parser.y"
 
     int    ival;          /* INT_NUM */
     float  fval;          /* FLOAT_NUM */
@@ -282,7 +283,7 @@ typedef union YYSTYPE
 
 
 /* Line 214 of yacc.c  */
-#line 286 "parser.tab.c"
+#line 287 "parser.tab.c"
 } YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
@@ -294,7 +295,7 @@ typedef union YYSTYPE
 
 
 /* Line 264 of yacc.c  */
-#line 298 "parser.tab.c"
+#line 299 "parser.tab.c"
 
 #ifdef short
 # undef short
@@ -583,11 +584,11 @@ static const yytype_int8 yyrhs[] =
 };
 
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
-static const yytype_uint8 yyrline[] =
+static const yytype_uint16 yyrline[] =
 {
-       0,   180,   180,   184,   185,   189,   198,   199,   203,   208,
-     209,   210,   214,   215,   231,   246,   247,   248,   252,   253,
-     254,   255
+       0,   181,   181,   185,   186,   190,   200,   201,   205,   210,
+     211,   212,   216,   217,   236,   253,   254,   255,   259,   270,
+     271,   272
 };
 #endif
 
@@ -1514,83 +1515,87 @@ yyreduce:
         case 2:
 
 /* Line 1455 of yacc.c  */
-#line 180 "parser.y"
+#line 181 "parser.y"
     { ast_root = (yyvsp[(2) - (2)].node); ;}
     break;
 
   case 3:
 
 /* Line 1455 of yacc.c  */
-#line 184 "parser.y"
+#line 185 "parser.y"
     { (yyval.node) = NULL; ;}
     break;
 
   case 5:
 
 /* Line 1455 of yacc.c  */
-#line 190 "parser.y"
+#line 191 "parser.y"
     {
-          if (!sym_insert((yyvsp[(2) - (5)].str), (yyvsp[(1) - (5)].dtype), (yyvsp[(4) - (5)].node), 0))
+          if (!sym_insert((yyvsp[(2) - (5)].str), (yyvsp[(1) - (5)].dtype), (yyvsp[(4) - (5)].node), 0)) {
               fprintf(stderr, "Semantic error: redeclaration of '%s'\n", (yyvsp[(2) - (5)].str));
-          /* Remember the expression for later initialisation code */
+              error_count++;
+          }
       ;}
     break;
 
   case 6:
 
 /* Line 1455 of yacc.c  */
-#line 198 "parser.y"
+#line 200 "parser.y"
     { (yyval.dtype) = VAR_INT; ;}
     break;
 
   case 7:
 
 /* Line 1455 of yacc.c  */
-#line 199 "parser.y"
+#line 201 "parser.y"
     { (yyval.dtype) = VAR_FLOAT; ;}
     break;
 
   case 8:
 
 /* Line 1455 of yacc.c  */
-#line 204 "parser.y"
+#line 206 "parser.y"
     { (yyval.node) = make_loop((yyvsp[(3) - (9)].node), (yyvsp[(7) - (9)].node)); ;}
     break;
 
   case 9:
 
 /* Line 1455 of yacc.c  */
-#line 208 "parser.y"
+#line 210 "parser.y"
     { (yyval.node) = make_block(NULL, 0); ;}
     break;
 
   case 10:
 
 /* Line 1455 of yacc.c  */
-#line 209 "parser.y"
+#line 211 "parser.y"
     { append_stmt((yyvsp[(1) - (2)].node), (yyvsp[(2) - (2)].node)); (yyval.node) = (yyvsp[(1) - (2)].node); ;}
     break;
 
   case 11:
 
 /* Line 1455 of yacc.c  */
-#line 210 "parser.y"
+#line 212 "parser.y"
     { yyerrok; ;}
     break;
 
   case 13:
 
 /* Line 1455 of yacc.c  */
-#line 216 "parser.y"
+#line 218 "parser.y"
     {
           Symbol *sym = sym_lookup((yyvsp[(1) - (4)].str));
-          if (!sym)
+          if (!sym) {
               fprintf(stderr, "Semantic error: undeclared variable '%s'\n", (yyvsp[(1) - (4)].str));
-          else {
+              error_count++;
+          } else {
               VarType lhs = sym->type;
               VarType rhs = node_type((yyvsp[(3) - (4)].node));
-              if (lhs != rhs)
+              if (lhs != rhs) {
                   fprintf(stderr, "Semantic error: type mismatch in assignment to '%s'\n", (yyvsp[(1) - (4)].str));
+                  error_count++;
+              }
           }
           (yyval.node) = make_assign((yyvsp[(1) - (4)].str), (yyvsp[(3) - (4)].node));
       ;}
@@ -1599,7 +1604,7 @@ yyreduce:
   case 14:
 
 /* Line 1455 of yacc.c  */
-#line 232 "parser.y"
+#line 237 "parser.y"
     {
           char *fmt = (yyvsp[(3) - (7)].str);
           ASTNode *expr = (yyvsp[(5) - (7)].node);
@@ -1607,8 +1612,10 @@ yyreduce:
           int ok = 0;
           if (strcmp(fmt, "\"%d\"") == 0 && etype == VAR_INT) ok = 1;
           else if (strcmp(fmt, "\"%f\"") == 0 && etype == VAR_FLOAT) ok = 1;
-          if (!ok)
+          if (!ok) {
               fprintf(stderr, "Semantic error: format/type mismatch in printf\n");
+              error_count++;
+          }
           (yyval.node) = make_printf(fmt, expr);
       ;}
     break;
@@ -1616,49 +1623,58 @@ yyreduce:
   case 15:
 
 /* Line 1455 of yacc.c  */
-#line 246 "parser.y"
+#line 253 "parser.y"
     { (yyval.node) = make_add((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 16:
 
 /* Line 1455 of yacc.c  */
-#line 247 "parser.y"
+#line 254 "parser.y"
     { (yyval.node) = make_lt((yyvsp[(1) - (3)].node), (yyvsp[(3) - (3)].node)); ;}
     break;
 
   case 18:
 
 /* Line 1455 of yacc.c  */
-#line 252 "parser.y"
-    { (yyval.node) = make_id((yyvsp[(1) - (1)].str)); ;}
+#line 260 "parser.y"
+    {
+          if (!sym_lookup((yyvsp[(1) - (1)].str))) {
+              fprintf(stderr, "Semantic error: undeclared variable '%s'\n", (yyvsp[(1) - (1)].str));
+              error_count++;
+              /* Provide a safe dummy node so further checks don't crash */
+              (yyval.node) = make_int(0);
+          } else {
+              (yyval.node) = make_id((yyvsp[(1) - (1)].str));
+          }
+      ;}
     break;
 
   case 19:
 
 /* Line 1455 of yacc.c  */
-#line 253 "parser.y"
+#line 270 "parser.y"
     { (yyval.node) = make_int((yyvsp[(1) - (1)].ival)); ;}
     break;
 
   case 20:
 
 /* Line 1455 of yacc.c  */
-#line 254 "parser.y"
+#line 271 "parser.y"
     { (yyval.node) = make_float((yyvsp[(1) - (1)].fval)); ;}
     break;
 
   case 21:
 
 /* Line 1455 of yacc.c  */
-#line 255 "parser.y"
+#line 272 "parser.y"
     { (yyval.node) = (yyvsp[(2) - (3)].node); ;}
     break;
 
 
 
 /* Line 1455 of yacc.c  */
-#line 1662 "parser.tab.c"
+#line 1678 "parser.tab.c"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -1870,7 +1886,7 @@ yyreturn:
 
 
 /* Line 1675 of yacc.c  */
-#line 258 "parser.y"
+#line 275 "parser.y"
 
 
 /* ============================================================
