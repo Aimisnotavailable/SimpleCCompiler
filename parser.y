@@ -1,690 +1,256 @@
+%defines                     /* ← generate parser.tab.h */
+
 %{
-/* ============================================================
-   parser.y – Complete compiler front‑end with TAC generation
-   ============================================================ */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdarg.h>
-#include "common.h"
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdarg.h>
 
-#ifndef VARTYPE_DEFINED
-#define VARTYPE_DEFINED
-#endif
+    /* DataType is only needed inside the parser actions, not in the header. */
+    typedef enum { TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_ERROR, TYPE_VOID } DataType;
 
-/* ------------------------------------------------------------------
-   Forward declarations for the backend (code generator)
-   ------------------------------------------------------------------ */
-void generate_emu8086(const char *filename);
+    /* ---------- Simple symbol table ---------- */
+    typedef struct Sym {
+        char* name;
+        DataType type;
+        struct Sym* next;
+    } Symbol;
+    Symbol* sym_table = NULL;
 
+    Symbol* lookup(const char* name) {
+        Symbol* s = sym_table;
+        while (s) { if (!strcmp(s->name, name)) return s; s = s->next; }
+        return NULL;
+    }
+    void install(const char* name, DataType t) {
+        Symbol* s = malloc(sizeof(Symbol));
+        s->name = strdup(name);
+        s->type = t;
+        s->next = sym_table;
+        sym_table = s;
+    }
 
-/* ------------------------------------------------------------------
-   AST Node definitions
-   ------------------------------------------------------------------ */
-typedef enum {
-    NODE_INT, NODE_FLOAT, NODE_ID,
-    NODE_ADD, NODE_LT,
-    NODE_ASSIGN,
-    NODE_PRINTF,
-    NODE_BLOCK,
-    NODE_LOOP
-} NodeKind;
+    /* ---------- Error collection ---------- */
+    #define MAX_ERR 100
+    char* errors[MAX_ERR];
+    int err_cnt = 0;
 
-typedef struct ASTNode {
-    NodeKind kind;
-    union {
-        int    ival;                    /* NODE_INT */
-        float  fval;                    /* NODE_FLOAT */
-        char  *sval;                    /* NODE_ID */
-        struct {
-            struct ASTNode *left, *right;
-        } bin;                          /* NODE_ADD, NODE_LT */
-        struct {
-            char *name;
-            struct ASTNode *expr;
-        } assign;                       /* NODE_ASSIGN */
-        struct {
-            char *fmt;
-            struct ASTNode *expr;
-        } print;                        /* NODE_PRINTF */
-        struct {
-            struct ASTNode *body, *cond;
-        } loop;                         /* NODE_LOOP */
-        struct {
-            struct ASTNode **stmts;
-            int cnt;
-        } block;                        /* NODE_BLOCK */
-    } d;
-} ASTNode;
+    void add_error(const char* fmt, ...) {
+        char buf[256];
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
+        if (err_cnt < MAX_ERR) errors[err_cnt++] = strdup(buf);
+    }
 
-void generate_ast_dot(ASTNode *root, const char *filename);
+    void print_errors() {
+        if (err_cnt == 0)
+            printf("Code is valid.\n");
+        else {
+            printf("Errors (%d):\n", err_cnt);
+            for (int i = 0; i < err_cnt; i++)
+                printf("  - %s\n", errors[i]);
+        }
+    }
 
-/* Constructor prototypes */
-ASTNode* make_int(int val);
-ASTNode* make_float(float val);
-ASTNode* make_id(char *name);
-ASTNode* make_add(ASTNode *l, ASTNode *r);
-ASTNode* make_lt(ASTNode *l, ASTNode *r);
-ASTNode* make_assign(char *name, ASTNode *expr);
-ASTNode* make_printf(char *fmt, ASTNode *expr);
-ASTNode* make_block(ASTNode **stmts, int cnt);
-ASTNode* make_loop(ASTNode *body, ASTNode *cond);
-void append_stmt(ASTNode *block, ASTNode *stmt);
+    /* ---------- printf argument tracking ---------- */
+    DataType arg_types[20];
+    int arg_count = 0;
+    extern char* current_format_string;   /* set by lexer */
 
-/* ------------------------------------------------------------------
-   Symbol table (global scope only)
-   ------------------------------------------------------------------ */
+    void reset_args() { arg_count = 0; current_format_string = NULL; }
+    void add_arg(DataType t) { if (arg_count < 20) arg_types[arg_count++] = t; }
 
-#define MAX_SYMBOLS 200
-Symbol symtab[MAX_SYMBOLS];
-int sym_cnt = 0;
+    void check_printf() {
+        if (!current_format_string) {
+            add_error("Semantic error: printf first argument must be a string literal");
+            return;
+        }
+        char* p = current_format_string + 1;   /* skip opening " */
+        int expected[20], exp_cnt = 0;
+        while (*p && *p != '"') {
+            if (*p == '%') {
+                p++;
+                if (*p == 'd') expected[exp_cnt++] = TYPE_INT;
+                else if (*p == 'f') expected[exp_cnt++] = TYPE_FLOAT;
+                else if (*p == 's') expected[exp_cnt++] = TYPE_STRING;
+                else { add_error("Semantic error: unknown format specifier '%%%c'", *p); return; }
+            }
+            p++;
+        }
+        if (exp_cnt != arg_count) {
+            add_error("Semantic error: printf expects %d data arguments, got %d", exp_cnt, arg_count);
+            return;
+        }
+        for (int i = 0; i < exp_cnt; i++) {
+            if (expected[i] == TYPE_INT && arg_types[i] != TYPE_INT)
+                add_error("Semantic error: argument %d to printf should be int, but got float", i+1);
+            else if (expected[i] == TYPE_FLOAT && arg_types[i] != TYPE_FLOAT)
+                add_error("Semantic error: argument %d to printf should be float, but got int", i+1);
+        }
+    }
 
-int  sym_insert(char *name, VarType type, ASTNode *init, int is_temp);
-Symbol* sym_lookup(char *name);
-VarType sym_get_type(char *name);
-
-/* ------------------------------------------------------------------
-   Type inference for expressions
-   ------------------------------------------------------------------ */
-VarType node_type(ASTNode *n);
-
-/* ------------------------------------------------------------------
-   Three‑address code (TAC) structures and globals
-   ------------------------------------------------------------------ */
-
-#define MAX_QUADS 500
-Quad quads[MAX_QUADS];
-int nquad = 0;
-
-#define MAX_CONST 100
-Constant const_pool[MAX_CONST];
-int nconst = 0;
-
-int temp_counter = 0;
-int label_counter = 0;
-
-/* TAC helpers */
-void emit_quad(OpCode op, char *dest, char *src1, char *src2, VarType dest_type);
-char* new_temp(VarType type);
-char* new_label(void);
-char* new_int_const(int val);
-char* new_float_const(float val);
-
-/* Forward declarations for TAC generation */
-char* gen_expr(ASTNode *node);
-void  gen_stmt(ASTNode *stmt);
-void  gen_program(ASTNode *root);
-
-/* ------------------------------------------------------------------
-   Root of the AST, set during parsing
-   ------------------------------------------------------------------ */
-ASTNode *ast_root = NULL;
-
-/* ------------------------------------------------------------------
-   Error counter
-   ------------------------------------------------------------------ */
-int error_count = 0;
-
-/* Override yyerror to count errors */
-void yyerror(const char *msg) {
-    fprintf(stderr, "Syntax error: %s\n", msg);
-    error_count++;
-}
-
-/* ------------------------------------------------------------------
-   Flex / Bison interface
-   ------------------------------------------------------------------ */
-extern int yylex();
-extern int yyparse();
-extern FILE *yyin;
-
+    /* ---------- Syntax error handling ---------- */
+    extern int yylineno;
+    void yyerror(const char* s) {
+        add_error("Syntax error at line %d: %s", yylineno, s);
+    }
 %}
 
-%code requires {
-    #ifndef VARTYPE_DEFINED
-    #define VARTYPE_DEFINED
-    typedef enum { VAR_INT, VAR_FLOAT } VarType;
-    #endif
-}
-
-
-/* ============================================================
-   Bison declarations
-   ============================================================ */
+/* ---------- Bison union (now uses plain int for the semantic type) ---------- */
 %union {
-    int    ival;          /* INT_NUM */
-    float  fval;          /* FLOAT_NUM */
-    char  *str;           /* ID, STRING */
-    struct ASTNode *node; /* expressions and statements */
-    VarType dtype;        /* for Type nonterminal */
+    int   intVal;
+    float floatVal;
+    char* str;
+    int   type;          /* was DataType; now a plain int */
 }
 
-%token INT FLOAT DO WHILE PRINTF
-%token<str> ID STRING
-%token<ival> INT_NUM
-%token<fval> FLOAT_NUM
+/* ---------- Tokens ---------- */
+%token INT_KEYWORD FLOAT_KEYWORD DO WHILE
+%token <str>    ID STRING_LITERAL
+%token <intVal> INT_CONST
+%token <floatVal> FLOAT_CONST
 
-%type<node> Program DeclList Declaration Stmt StmtList DoWhileStmt Expr Term PrintfStmt
-%type<dtype> Type
+/* ---------- Precedence ---------- */
+%left '='
+%left '<' '>'
+%left '+' '-'
+%left '*' '/'
+%nonassoc UMINUS
 
-%left '<'
-%left '+'
-%right '='
+/* ---------- Types of non‑terminals (now refer to plain int) ---------- */
+%type <type> expression
+%type <type> function_call
+%type <type> argument
 
-%start Program
+%start program
 
 %%
-/* ============================================================
-   Grammar rules with actions
-   ============================================================ */
-Program
-    : DeclList DoWhileStmt   { ast_root = $2; }
-    ;
+program:
+    block_items
+;
 
-DeclList
-    : /* empty */    { $$ = NULL; }
-    | DeclList Declaration
-    ;
+block_items:
+    block_item
+  | block_items block_item
+;
 
-Declaration
-    : Type ID '=' Expr ';'
-      {
-          if (!sym_insert($2, $1, $4, 0)) {
-              fprintf(stderr, "Semantic error: redeclaration of '%s'\n", $2);
-              error_count++;
-          }
-      }
-    ;
+block_item:
+    declaration ';'
+  | statement
+  | error ';'   { yyerrok; }
+;
 
-Type
-    : INT    { $$ = VAR_INT; }
-    | FLOAT  { $$ = VAR_FLOAT; }
-    ;
+declaration:
+    INT_KEYWORD ID                {
+                                      if (!lookup($2)) install($2, TYPE_INT);
+                                      else add_error("Semantic error: redeclaration of '%s'", $2);
+                                  }
+  | INT_KEYWORD ID '=' expression {
+                                      if (!lookup($2)) install($2, TYPE_INT);
+                                      else add_error("Semantic error: redeclaration of '%s'", $2);
+                                      if ($4 != TYPE_INT)
+                                          add_error("Semantic error: type mismatch in init of '%s'", $2);
+                                  }
+  | FLOAT_KEYWORD ID              {
+                                      if (!lookup($2)) install($2, TYPE_FLOAT);
+                                      else add_error("Semantic error: redeclaration of '%s'", $2);
+                                  }
+  | FLOAT_KEYWORD ID '=' expression {
+                                      if (!lookup($2)) install($2, TYPE_FLOAT);
+                                      else add_error("Semantic error: redeclaration of '%s'", $2);
+                                      if ($4 != TYPE_FLOAT && $4 != TYPE_INT)
+                                          add_error("Semantic error: type mismatch in init of '%s'", $2);
+                                  }
+;
 
-DoWhileStmt
-    : DO '{' StmtList '}' WHILE '(' Expr ')' ';'
-      { $$ = make_loop($3, $7); }
-    ;
+statement:
+    compound_stmt
+  | do_while_stmt
+  | expression_stmt
+;
 
-StmtList
-    : /* empty */               { $$ = make_block(NULL, 0); }
-    | StmtList Stmt             { append_stmt($1, $2); $$ = $1; }
-    | StmtList error ';'        { yyerrok; }  /* error recovery */
-    ;
+expression_stmt:
+    expression ';'
+  | ';'
+;
 
-Stmt
-    : PrintfStmt
-    | ID '=' Expr ';'
-      {
-          Symbol *sym = sym_lookup($1);
-          if (!sym) {
-              fprintf(stderr, "Semantic error: undeclared variable '%s'\n", $1);
-              error_count++;
-          } else {
-              VarType lhs = sym->type;
-              VarType rhs = node_type($3);
-              if (lhs != rhs) {
-                  fprintf(stderr, "Semantic error: type mismatch in assignment to '%s'\n", $1);
-                  error_count++;
-              }
-          }
-          $$ = make_assign($1, $3);
-      }
-    ;
+compound_stmt:
+    '{' block_items '}'
+;
 
-PrintfStmt
-    : PRINTF '(' STRING ',' Expr ')' ';'
-      {
-          char *fmt = $3;
-          ASTNode *expr = $5;
-          VarType etype = node_type(expr);
-          int ok = 0;
-          if (strcmp(fmt, "\"%d\"") == 0 && etype == VAR_INT) ok = 1;
-          else if (strcmp(fmt, "\"%f\"") == 0 && etype == VAR_FLOAT) ok = 1;
-          if (!ok) {
-              fprintf(stderr, "Semantic error: format/type mismatch in printf\n");
-              error_count++;
-          }
-          $$ = make_printf(fmt, expr);
-      }
-    ;
+do_while_stmt:
+    DO statement WHILE '(' expression ')' ';' {
+        if ($5 != TYPE_INT && $5 != TYPE_FLOAT)
+            add_error("Semantic error: do-while condition must be numeric");
+    }
+;
 
-Expr
-    : Expr '+' Expr   { $$ = make_add($1, $3); }
-    | Expr '<' Expr   { $$ = make_lt($1, $3); }
-    | Term
-    ;
+expression:
+    ID '=' expression      {
+                               Symbol* s = lookup($1);
+                               if (!s) add_error("Semantic error: '%s' undeclared", $1);
+                               else {
+                                   if (s->type == TYPE_INT && $3 != TYPE_INT)
+                                       add_error("Semantic error: assigning float to int variable '%s'", $1);
+                                   else if (s->type == TYPE_FLOAT && $3 != TYPE_FLOAT && $3 != TYPE_INT)
+                                       add_error("Semantic error: invalid assignment to float '%s'", $1);
+                                   $$ = s->type;
+                               }
+                           }
+  | expression '+' expression   { $$ = ($1 == TYPE_INT && $3 == TYPE_INT) ? TYPE_INT : TYPE_FLOAT; }
+  | expression '-' expression   { $$ = ($1 == TYPE_INT && $3 == TYPE_INT) ? TYPE_INT : TYPE_FLOAT; }
+  | expression '*' expression   { $$ = ($1 == TYPE_INT && $3 == TYPE_INT) ? TYPE_INT : TYPE_FLOAT; }
+  | expression '/' expression   { $$ = ($1 == TYPE_INT && $3 == TYPE_INT) ? TYPE_INT : TYPE_FLOAT; }
+  | expression '<' expression   { $$ = TYPE_INT; }
+  | expression '>' expression   { $$ = TYPE_INT; }
+  | '-' expression %prec UMINUS { $$ = $2; }
+  | '(' expression ')'          { $$ = $2; }
+  | INT_CONST                   { $$ = TYPE_INT; }
+  | FLOAT_CONST                 { $$ = TYPE_FLOAT; }
+  | STRING_LITERAL              { $$ = TYPE_STRING; }
+  | ID                          {
+                                    Symbol* s = lookup($1);
+                                    if (!s) add_error("Semantic error: '%s' undeclared", $1);
+                                    else $$ = s->type;
+                                }
+  | function_call               { $$ = $1; }
+;
 
-Term
-    : ID
-      {
-          if (!sym_lookup($1)) {
-              fprintf(stderr, "Semantic error: undeclared variable '%s'\n", $1);
-              error_count++;
-              /* Provide a safe dummy node so further checks don't crash */
-              $$ = make_int(0);
-          } else {
-              $$ = make_id($1);
-          }
-      }
-    | INT_NUM          { $$ = make_int($1); }
-    | FLOAT_NUM        { $$ = make_float($1); }
-    | '(' Expr ')'     { $$ = $2; }
-    ;
+function_call:
+    ID '(' ')'                  {
+                                    if (!strcmp($1, "printf"))
+                                        add_error("Semantic error: printf requires a format string");
+                                    $$ = TYPE_VOID;
+                                }
+  | ID '(' argument_list ')'   {
+                                    $$ = TYPE_VOID;
+                                    if (!strcmp($1, "printf")) {
+                                        check_printf();
+                                    }
+                                    reset_args();
+                                }
+;
+
+argument_list:
+    argument
+  | argument_list ',' argument
+;
+
+argument:
+    expression                   {
+                                    add_arg($1);
+                                    $$ = $1;
+                                }
+;
 
 %%
 
-/* ============================================================
-   AST constructors
-   ============================================================ */
-ASTNode* make_node(NodeKind kind) {
-    ASTNode *n = (ASTNode*)malloc(sizeof(ASTNode));
-    n->kind = kind;
-    return n;
-}
-
-ASTNode* make_int(int val) {
-    ASTNode *n = make_node(NODE_INT);
-    n->d.ival = val;
-    return n;
-}
-
-ASTNode* make_float(float val) {
-    ASTNode *n = make_node(NODE_FLOAT);
-    n->d.fval = val;
-    return n;
-}
-
-ASTNode* make_id(char *name) {
-    ASTNode *n = make_node(NODE_ID);
-    n->d.sval = strdup(name);
-    return n;
-}
-
-ASTNode* make_add(ASTNode *l, ASTNode *r) {
-    ASTNode *n = make_node(NODE_ADD);
-    n->d.bin.left = l;
-    n->d.bin.right = r;
-    return n;
-}
-
-ASTNode* make_lt(ASTNode *l, ASTNode *r) {
-    ASTNode *n = make_node(NODE_LT);
-    n->d.bin.left = l;
-    n->d.bin.right = r;
-    return n;
-}
-
-ASTNode* make_assign(char *name, ASTNode *expr) {
-    ASTNode *n = make_node(NODE_ASSIGN);
-    n->d.assign.name = strdup(name);
-    n->d.assign.expr = expr;
-    return n;
-}
-
-ASTNode* make_printf(char *fmt, ASTNode *expr) {
-    ASTNode *n = make_node(NODE_PRINTF);
-    n->d.print.fmt = strdup(fmt);
-    n->d.print.expr = expr;
-    return n;
-}
-
-ASTNode* make_block(ASTNode **stmts, int cnt) {
-    ASTNode *n = make_node(NODE_BLOCK);
-    if (cnt > 0) {
-        n->d.block.stmts = malloc(cnt * sizeof(ASTNode*));
-        memcpy(n->d.block.stmts, stmts, cnt * sizeof(ASTNode*));
-        n->d.block.cnt = cnt;
-    } else {
-        n->d.block.stmts = NULL;
-        n->d.block.cnt = 0;
-    }
-    return n;
-}
-
-void append_stmt(ASTNode *block, ASTNode *stmt) {
-    if (!block || block->kind != NODE_BLOCK) return;
-    block->d.block.stmts = realloc(block->d.block.stmts,
-                                   (block->d.block.cnt + 1) * sizeof(ASTNode*));
-    block->d.block.stmts[block->d.block.cnt++] = stmt;
-}
-
-ASTNode* make_loop(ASTNode *body, ASTNode *cond) {
-    ASTNode *n = make_node(NODE_LOOP);
-    n->d.loop.body = body;
-    n->d.loop.cond = cond;
-    return n;
-}
-
-/* ============================================================
-   Symbol table operations
-   ============================================================ */
-int sym_insert(char *name, VarType type, ASTNode *init, int is_temp) {
-    for (int i = 0; i < sym_cnt; i++)
-        if (strcmp(symtab[i].name, name) == 0)
-            return 0;               /* duplicate */
-    if (sym_cnt >= MAX_SYMBOLS) {
-        fprintf(stderr, "Symbol table overflow!\n");
-        exit(1);
-    }
-    symtab[sym_cnt].name = strdup(name);
-    symtab[sym_cnt].type = type;
-    symtab[sym_cnt].init = init;
-    symtab[sym_cnt].is_temp = is_temp;
-    sym_cnt++;
-    return 1;
-}
-
-Symbol* sym_lookup(char *name) {
-    for (int i = 0; i < sym_cnt; i++)
-        if (strcmp(symtab[i].name, name) == 0)
-            return &symtab[i];
-    return NULL;
-}
-
-VarType sym_get_type(char *name) {
-    Symbol *s = sym_lookup(name);
-    return s ? s->type : VAR_INT;
-}
-
-/* ============================================================
-   Type inference for AST nodes
-   ============================================================ */
-VarType node_type(ASTNode *n) {
-    switch (n->kind) {
-        case NODE_INT:   return VAR_INT;
-        case NODE_FLOAT: return VAR_FLOAT;
-        case NODE_ID:    return sym_get_type(n->d.sval);
-        case NODE_ADD: {
-            VarType t1 = node_type(n->d.bin.left);
-            VarType t2 = node_type(n->d.bin.right);
-            return (t1 == VAR_FLOAT || t2 == VAR_FLOAT) ? VAR_FLOAT : VAR_INT;
-        }
-        case NODE_LT:    return VAR_INT;  /* comparison yields int (boolean) */
-        default:         return VAR_INT;
-    }
-}
-
-/* ============================================================
-   Three‑address code generation
-   ============================================================ */
-void emit_quad(OpCode op, char *dest, char *src1, char *src2, VarType type) {
-    if (nquad >= MAX_QUADS) {
-        fprintf(stderr, "Too many quads!\n");
-        exit(1);
-    }
-    quads[nquad].op = op;
-    quads[nquad].dest = dest ? strdup(dest) : NULL;
-    quads[nquad].src1 = src1 ? strdup(src1) : NULL;
-    quads[nquad].src2 = src2 ? strdup(src2) : NULL;
-    quads[nquad].dest_type = type;
-    nquad++;
-}
-
-char* new_temp(VarType type) {
-    char buf[20];
-    sprintf(buf, "_t%d", temp_counter++);
-    sym_insert(buf, type, NULL, 1);  /* register as temporary */
-    return strdup(buf);
-}
-
-char* new_label(void) {
-    char buf[20];
-    sprintf(buf, "L%d", label_counter++);
-    return strdup(buf);
-}
-
-char* new_int_const(int val) {
-    char buf[20];
-    sprintf(buf, "_ci%d", nconst);
-    const_pool[nconst].label = strdup(buf);
-    const_pool[nconst].type = VAR_INT;
-    const_pool[nconst].val.ival = val;
-    nconst++;
-    return strdup(buf);
-}
-
-char* new_float_const(float val) {
-    char buf[20];
-    sprintf(buf, "_cf%d", nconst);
-    const_pool[nconst].label = strdup(buf);
-    const_pool[nconst].type = VAR_FLOAT;
-    const_pool[nconst].val.fval = val;
-    nconst++;
-    return strdup(buf);
-}
-
-char* gen_expr(ASTNode *node) {
-    switch (node->kind) {
-        case NODE_INT:   return new_int_const(node->d.ival);
-        case NODE_FLOAT: return new_float_const(node->d.fval);
-        case NODE_ID: {
-            if (!sym_lookup(node->d.sval))
-                return strdup("_error_");
-            return strdup(node->d.sval);
-        }
-        case NODE_ADD: {
-            char *left = gen_expr(node->d.bin.left);
-            char *right = gen_expr(node->d.bin.right);
-            VarType type = node_type(node);
-            char *dest = new_temp(type);
-            emit_quad(OP_ADD, dest, left, right, type);
-            return dest;
-        }
-        case NODE_LT: {
-            char *left = gen_expr(node->d.bin.left);
-            char *right = gen_expr(node->d.bin.right);
-            char *dest = new_temp(VAR_INT);
-            emit_quad(OP_LT, dest, left, right, VAR_INT);
-            return dest;
-        }
-        default:
-            fprintf(stderr, "Internal error: bad expr node\n");
-            return strdup("_error_");
-    }
-}
-
-void gen_stmt(ASTNode *stmt) {
-    if (!stmt) return;
-    switch (stmt->kind) {
-        case NODE_ASSIGN: {
-            char *rhs = gen_expr(stmt->d.assign.expr);
-            VarType type = sym_get_type(stmt->d.assign.name);
-            emit_quad(OP_ASSIGN, stmt->d.assign.name, rhs, NULL, type);
-            break;
-        }
-        case NODE_PRINTF: {
-            ASTNode *expr = stmt->d.print.expr;
-            char *arg = gen_expr(expr);
-            if (strstr(stmt->d.print.fmt, "%d"))
-                emit_quad(OP_PRINT_INT, NULL, arg, NULL, VAR_INT);
-            else
-                emit_quad(OP_PRINT_FLOAT, NULL, arg, NULL, VAR_FLOAT);
-            break;
-        }
-        case NODE_BLOCK:
-            for (int i = 0; i < stmt->d.block.cnt; i++)
-                gen_stmt(stmt->d.block.stmts[i]);
-            break;
-        case NODE_LOOP: {
-            char *start = new_label();
-            emit_quad(OP_LABEL, start, NULL, NULL, 0);
-            gen_stmt(stmt->d.loop.body);
-            char *cond = gen_expr(stmt->d.loop.cond);
-            emit_quad(OP_JMPTRUE, NULL, cond, start, 0);
-            break;
-        }
-        default:
-            fprintf(stderr, "Internal error: bad stmt node\n");
-    }
-}
-
-void gen_program(ASTNode *root) {
-    /* First, generate initialisation code for declared variables */
-    for (int i = 0; i < sym_cnt; i++) {
-        if (symtab[i].is_temp) continue;  /* skip temporaries */
-        if (symtab[i].init) {
-            char *rhs = gen_expr(symtab[i].init);
-            emit_quad(OP_ASSIGN, symtab[i].name, rhs, NULL, symtab[i].type);
-        } else {
-            /* Default initialisation: 0 for int, 0.0 for float */
-            if (symtab[i].type == VAR_INT)
-                emit_quad(OP_ASSIGN, symtab[i].name, new_int_const(0), NULL, VAR_INT);
-            else
-                emit_quad(OP_ASSIGN, symtab[i].name, new_float_const(0.0f), NULL, VAR_FLOAT);
-        }
-    }
-    /* Then the program body */
-    gen_stmt(root);
-    emit_quad(OP_HALT, NULL, NULL, NULL, 0);
-}
-
-/* ------------------------------------------------------------------
-   AST visualisation – Graphviz DOT format
-   ------------------------------------------------------------------ */
-static int node_id_counter = 0;
-
-static void ast_to_dot_rec(FILE *f, ASTNode *n, int parent_id) {
-    if (!n) return;
-    int my_id = node_id_counter++;
-    const char *shape = "ellipse";
-    char label[256] = "";
-
-    switch (n->kind) {
-        case NODE_INT:
-            snprintf(label, sizeof(label), "INT(%d)", n->d.ival);
-            shape = "box";
-            break;
-        case NODE_FLOAT:
-            snprintf(label, sizeof(label), "FLOAT(%g)", n->d.fval);
-            shape = "box";
-            break;
-        case NODE_ID:
-            snprintf(label, sizeof(label), "ID(%s)", n->d.sval);
-            shape = "box";
-            break;
-        case NODE_ADD:
-            snprintf(label, sizeof(label), "ADD");
-            break;
-        case NODE_LT:
-            snprintf(label, sizeof(label), "LT");
-            break;
-        case NODE_ASSIGN:
-            snprintf(label, sizeof(label), "ASSIGN(%s)", n->d.assign.name);
-            break;
-        case NODE_PRINTF: 
-            /* fmt is like "%f", including the surrounding double quotes */
-            char *raw = n->d.print.fmt;
-            char clean[256];
-            int j = 0;
-            for (int i = 0; raw[i] != '\0'; i++) {
-                if (raw[i] == '"') {
-                    clean[j++] = '\\';   /* escape the quote for DOT */
-                }
-                clean[j++] = raw[i];
-            }
-            clean[j] = '\0';
-
-            /* Now clean is \"%f\" */
-            /* Assemble label: PRINTF(\"%f\") */
-            snprintf(label, sizeof(label), "PRINTF(%s)", clean);
-            shape = "diamond";
-            break;
-        case NODE_BLOCK:
-            snprintf(label, sizeof(label), "BLOCK[%d]", n->d.block.cnt);
-            shape = "tab";
-            break;
-        case NODE_LOOP:
-            snprintf(label, sizeof(label), "DO-WHILE");
-            shape = "house";
-            break;
-        default:
-            snprintf(label, sizeof(label), "???");
-            break;
-    }
-
-    fprintf(f, "  n%d [label=\"%s\", shape=%s];\n", my_id, label, shape);
-    if (parent_id >= 0)
-        fprintf(f, "  n%d -> n%d;\n", parent_id, my_id);
-
-    /* Add children according to node kind */
-    switch (n->kind) {
-        case NODE_ADD:
-        case NODE_LT:
-            ast_to_dot_rec(f, n->d.bin.left, my_id);
-            ast_to_dot_rec(f, n->d.bin.right, my_id);
-            break;
-        case NODE_ASSIGN:
-            ast_to_dot_rec(f, n->d.assign.expr, my_id);
-            break;
-        case NODE_PRINTF:
-            ast_to_dot_rec(f, n->d.print.expr, my_id);
-            break;
-        case NODE_BLOCK:
-            for (int i = 0; i < n->d.block.cnt; i++)
-                ast_to_dot_rec(f, n->d.block.stmts[i], my_id);
-            break;
-        case NODE_LOOP:
-            ast_to_dot_rec(f, n->d.loop.body, my_id);
-            ast_to_dot_rec(f, n->d.loop.cond, my_id);
-            break;
-        default:
-            break;  /* leaf nodes */
-    }
-}
-
-void generate_ast_dot(ASTNode *root, const char *filename) {
-    if (!root) return;
-    FILE *f = fopen(filename, "w");
-    if (!f) {
-        perror(filename);
-        return;
-    }
-    node_id_counter = 0;
-    fprintf(f, "digraph AST {\n");
-    fprintf(f, "  node [fontname=\"Courier\"];\n");
-    ast_to_dot_rec(f, root, -1);
-    fprintf(f, "}\n");
-    fclose(f);
-    printf("AST written to %s\n", filename);
-}
-
-/* ============================================================
-   Main driver – parse, generate TAC, call backend
-   ============================================================ */
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <source-file>\n", argv[0]);
-        return 1;
-    }
-    FILE *f = fopen(argv[1], "r");
-    if (!f) {
-        perror(argv[1]);
-        return 1;
-    }
-    yyin = f;
+int main(int argc, char** argv) {
+    extern FILE* yyin;
+    if (argc > 1) yyin = fopen(argv[1], "r");
     yyparse();
-    fclose(f);
-
-    if (error_count > 0) {
-        fprintf(stderr, "Compilation aborted due to errors.\n");
-        return 1;
-    }
-
-    /* Generate TAC */
-    gen_program(ast_root);
-
-    /* Generate Graphviz .dot file */
-    if (ast_root) {
-        generate_ast_dot(ast_root, "ast.dot");
-    }   
-
-    printf("Before generate_emu8086, symtab:\n");
-    for (int i = 0; i < sym_cnt; i++)
-        printf("  [%d] %s\n", i, symtab[i].name);
-
-    /* Write emu8086 assembly */
-    generate_emu8086("output.asm");
-
+    print_errors();
     return 0;
 }
